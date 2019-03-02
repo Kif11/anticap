@@ -1,0 +1,1 @@
+go build -o ./build/pacmon src/main.go src/store.go src/monitor.go src/rating.go src/utils.go
