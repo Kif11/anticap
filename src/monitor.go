@@ -1,12 +1,12 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcap"
+	scribble "github.com/nanobox-io/golang-scribble"
 )
 
 func handlePacket(p gopacket.Packet) *layers.Dot11 {
@@ -19,11 +19,7 @@ func handlePacket(p gopacket.Packet) *layers.Dot11 {
 	return nil
 }
 
-func monitor(intrfc string, targetDevice string, maxNumPackets int) (map[string]int, error) {
-	if !isSudo() {
-		return nil, errors.New("This program needs to be run as sudo")
-	}
-
+func monitor(db *scribble.Driver, intrfc string, targetDevice string, maxNumPackets int) (map[string]device, error) {
 	handle, err := pcap.OpenLive(intrfc, 65536, true, pcap.BlockForever)
 	if err != nil {
 		return nil, err
@@ -43,7 +39,7 @@ func monitor(intrfc string, targetDevice string, maxNumPackets int) (map[string]
 
 	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
 
-	devices := make(map[string]int)
+	devices := make(map[string]device)
 	packetCount := 0
 
 	for packet := range packetSource.Packets() {
@@ -60,23 +56,51 @@ func monitor(intrfc string, targetDevice string, maxNumPackets int) (map[string]
 		}
 
 		dstAddr := chunk.Address1
-
-		// if *printAddresses {
 		srcAddr := chunk.Address2
-		fmt.Println(dstAddr, srcAddr)
-		// }
 
 		if dstAddr == nil {
 			continue
 		}
 
-		devices[dstAddr.String()]++
+		devicePair := fmt.Sprintf("%s %s\n", dstAddr, srcAddr)
 
-		// if *debug {
-		// for k, v := range devices {
-		// 	fmt.Println(k, v)
+		if *debug {
+			fmt.Printf(devicePair)
+		}
+
+		var newDevice device
+
+		if val, ok := devices[dstAddr.String()]; ok {
+			val.PCount++
+			newDevice = val
+		} else {
+			newDevice = device{
+				Address: dstAddr.String(),
+				PCount:  0,
+				Rating:  0,
+			}
+		}
+
+		devices[dstAddr.String()] = newDevice
+
+		db.Write(srcAddr.String(), dstAddr.String(), newDevice)
+
+		// // If the file doesn't exist, create it, or append to the file
+		// f, err := os.OpenFile(*outFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		// if err != nil {
+		// 	log.Fatal(err)
 		// }
+		// defer f.Close()
+
+		// if _, err := f.Write([]byte(devicePair)); err != nil {
+		// 	log.Fatal(err)
 		// }
+
+		// devices = append(devices, devicePair)
+	}
+
+	if *debug {
+		fmt.Printf("Total %d devices discovered\n", len(devices))
 	}
 
 	return devices, nil

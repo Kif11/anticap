@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	scribble "github.com/nanobox-io/golang-scribble"
 	ping "github.com/sparrc/go-ping"
 )
 
@@ -13,21 +14,43 @@ func rateConnection(pingCount int) (int, error) {
 		return 0, err
 	}
 
-	pinger.Timeout = 4000
+	if *debug {
+		pinger.OnRecv = func(pkt *ping.Packet) {
+			fmt.Printf("%d bytes from %s: icmp_seq=%d time=%v\n",
+				pkt.Nbytes, pkt.IPAddr, pkt.Seq, pkt.Rtt)
+		}
+		pinger.OnFinish = func(stats *ping.Statistics) {
+			fmt.Printf("Ping statistics for %s\n", stats.Addr)
+			fmt.Printf("%d packets transmitted, %d packets received, %v%% packet loss\n",
+				stats.PacketsSent, stats.PacketsRecv, stats.PacketLoss)
+		}
+	}
 
-	pinger.Count = pingCount
+	// pinger.Run() will stop after this time
+	duration, err := time.ParseDuration("15s")
+	if err != nil {
+		return 0, err
+	}
+
+	pinger.Timeout = duration
+
+	pinger.Count = 10
 	pinger.Run() // blocks until finished
 	stats := pinger.Statistics()
 
-	return stats.PacketsSent, nil
+	return stats.PacketsRecv, nil
 }
 
-func rateConnections(intrfc string, devices map[string]int) (map[string]int, error) {
-	rated := make(map[string]int)
+func rateConnections(
+	db *scribble.Driver,
+	intrfc string,
+	targetDevice string,
+	devices map[string]device) (map[string]device, error) {
 
-	for address := range devices {
+	rated := make(map[string]device)
+	for address, d := range devices {
 		if *debug {
-			fmt.Println("Setting mac to ", address)
+			fmt.Println("Setting mac to", address)
 		}
 
 		if err := setMac(intrfc, address); err != nil {
@@ -37,23 +60,36 @@ func rateConnections(intrfc string, devices map[string]int) (map[string]int, err
 		time.Sleep(10 * time.Second)
 
 		if *debug {
-			fmt.Println("Testing connection for", address)
+			fmt.Println("Testing connection...")
 		}
-		connectionScore, err := rateConnection(10)
+		connectionScore, err := rateConnection(5)
 		if err != nil {
 			fmt.Println(err)
 			connectionScore = 0
 		}
 		if *debug {
-			fmt.Println("Score ", connectionScore)
+			fmt.Printf("Connection rated %d stars\n", connectionScore)
 		}
 
-		rated[address] = connectionScore
+		d.Rating = connectionScore
 
-		// if connectionScore > bestScore {
-		// 	selectedAddress = address
-		// 	bestScore = connectionScore
-		// }
+		db.Write(targetDevice, address, d)
+
+		rated[address] = d
 	}
 	return rated, nil
+}
+
+func getBestDevice(devices map[string]device) device {
+	bestAddress := ""
+	bestRating := 0
+
+	for address, d := range devices {
+		if d.Rating > bestRating {
+			bestRating = d.Rating
+			bestAddress = address
+		}
+	}
+
+	return devices[bestAddress]
 }

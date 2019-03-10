@@ -3,76 +3,118 @@ package main
 import (
 	"flag"
 	"fmt"
+	"os"
+
+	scribble "github.com/nanobox-io/golang-scribble"
 )
 
+type device struct {
+	Address string
+	PCount  int
+	Rating  int
+}
+
+type networkInterface struct {
+	Name    string
+	Address string
+}
+
+var defaultTarget, err = getRouterAddress()
 var debug = flag.Bool("v", false, "verbose output")
+var captureOnly = flag.Bool("s", false, "run packet capture and exit")
+var resetOriginal = flag.Bool("r", false, "reset to original mac address and exit")
+var targetInterface = flag.String("i", "en0", "name of wifi interface, use ifconfig to find out")
+var targetDevice = flag.String("t", defaultTarget, "mac address of target wifi network")
+var maxNumPackets = flag.Int("n", 100, "number of packets to capture before stop")
 
 func main() {
-	store := store{}
-	store.initDB()
+	flag.Parse()
 
-	defaultTarget, err := getRouterAddress()
+	if !isSudo() {
+		fmt.Println("This program must be run as root")
+		return
+	}
+
 	if err != nil {
 		fmt.Printf("can not determine target device mac address automatically please set it with -t option")
 	}
 
-	targetInterface := flag.String("i", "en0", "name of wifi interface, use ifconfig to find out")
-	targetDevice := flag.String("t", defaultTarget, "only packets originated from this router will be captures")
-	// printAddresses := flag.Bool("a", false, "output destination and source addresses")
-	maxNumPackets := 10
+	dir := "./store"
 
-	flag.Parse()
+	db, err := scribble.New(dir, nil)
+	if err != nil {
+		fmt.Println("Error", err)
+	}
 
-	store.insert(
-		"interfaces",
-		[]string{"interface", "address"},
-		[]string{*targetInterface, *targetDevice},
-	)
+	if *resetOriginal {
+		i := networkInterface{}
+		if err := db.Read("interfaces", *targetInterface, &i); err != nil {
+			panic(err)
+		}
+		if *debug {
+			fmt.Printf("Resseting mac address to %s for %s\n", i.Address, *targetInterface)
+		}
+		setMac(*targetInterface, i.Address)
+		return
+	}
+
+	interfaceStore := fmt.Sprintf("store/interfaces/%s.json", *targetInterface)
+
+	if _, err := os.Stat(interfaceStore); os.IsNotExist(err) {
+		if *debug {
+			fmt.Printf("Saving current mac address to %s\n", interfaceStore)
+		}
+		currentMacAddress, err := getRouterAddress()
+		if err != nil {
+			panic(err)
+		}
+
+		currentInterface := networkInterface{
+			Name:    *targetInterface,
+			Address: currentMacAddress,
+		}
+
+		db.Write("interfaces", *targetInterface, currentInterface)
+	}
+
+	// records, err := db.ReadAll("fc:ec:da:36:93:d4")
+	// if err != nil {
+	// 	fmt.Println("Error", err)
+	// }
+
+	// fmt.Println(records)
 
 	if *debug {
 		fmt.Printf("Starting packet capture on %s for %s hotspot\n", *targetInterface, *targetDevice)
 	}
 
-	devices, err := monitor("en0", *targetDevice, maxNumPackets)
+	devices, err := monitor(db, *targetInterface, *targetDevice, *maxNumPackets)
 	if err != nil {
 		panic(err)
 	}
 
-	for address, numPackets := range devices {
-		store.insert(
-			"devices",
-			[]string{"address", "router_address", "num_packets"},
-			[]string{address, *targetDevice, fmt.Sprintf("%d", numPackets)},
-		)
+	if *captureOnly {
+		return
 	}
 
-	// devicesFromDb := store.getDevices()
-	// fmt.Println(devicesFromDb)
-
-	// selectedAddress := ""
-	// bestScore := 0
-
-	rated, err := rateConnections(*targetInterface, devices)
+	ratedDevices, err := rateConnections(db, *targetInterface, *targetDevice, devices)
 	if err != nil {
 		panic(err)
 	}
 
-	fmt.Println(rated)
+	bestDevice := getBestDevice(ratedDevices)
 
-	// stmt, err := tx.Prepare(fmt.Sprintf(`UPDATE "devices"
-	// 	 SET score = (?)
-	// 	 WHERE address = %s;
-	// 	`, connectionScore, address))
-	// if err != nil {
-	// 	log.Fatal(err)
-	// }
-	// defer stmt.Close()
+	if bestDevice.Rating == 0 {
+		if *debug {
+			fmt.Println("Non of the devices has internet access. Exiting!")
+		}
+		return
+	}
 
-	// _, err = stmt.Exec(connectionScore)
-	// if err != nil {
-	// 	log.Fatal(err)
-	// }
-	// tx.Commit()
+	if *debug {
+		fmt.Printf("Setting mac to %s with connection rating %s\n", bestDevice.Address, bestDevice.Rating)
+	}
+	setMac(*targetInterface, bestDevice.Address)
 
-	// fmt.Println("Selected mac", selectedAddress, " with score ", bestScore)
+	return
 }
