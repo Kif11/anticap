@@ -68,7 +68,7 @@ func rateConnections(
 			connectionScore = 0
 		}
 		if *debug {
-			fmt.Printf("Connection rated %d stars\n", connectionScore)
+			fmt.Printf("Connection rated %d out of 10\n", connectionScore)
 		}
 
 		d.Rating = connectionScore

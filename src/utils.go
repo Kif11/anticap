@@ -3,19 +3,18 @@ package main
 import (
 	"bufio"
 	"errors"
-	"fmt"
 	"net"
 	"os"
 	"os/exec"
 	"strings"
 )
 
-func getMac(interfc string) string {
+func getMac(interfc string) (string, error) {
 	netInterface, err := net.InterfaceByName(interfc)
 	if err != nil {
-		fmt.Println(err)
+		return "", err
 	}
-	return netInterface.HardwareAddr.String()
+	return netInterface.HardwareAddr.String(), nil
 }
 
 func getRouterAddress() (string, error) {

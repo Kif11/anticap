@@ -31,7 +31,12 @@ func monitor(db *scribble.Driver, intrfc string, targetDevice string, maxNumPack
 		return nil, err
 	}
 
-	bpfFilter := fmt.Sprintf("ether src %s and not ether host ff:ff:ff:ff:ff:ff and not ether host %s", targetDevice, getMac(intrfc))
+	currentMac, err := getMac(intrfc)
+	if err != nil {
+		return nil, err
+	}
+
+	bpfFilter := fmt.Sprintf("ether src %s and not ether host ff:ff:ff:ff:ff:ff and not ether host %s", targetDevice, currentMac)
 
 	if err := handle.SetBPFFilter(bpfFilter); err != nil {
 		return nil, err

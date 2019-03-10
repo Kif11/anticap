@@ -61,12 +61,13 @@ func main() {
 	interfaceStore := fmt.Sprintf("store/interfaces/%s.json", *targetInterface)
 
 	if _, err := os.Stat(interfaceStore); os.IsNotExist(err) {
-		if *debug {
-			fmt.Printf("Saving current mac address to %s\n", interfaceStore)
-		}
-		currentMacAddress, err := getRouterAddress()
+		currentMacAddress, err := getMac(*targetInterface)
 		if err != nil {
 			panic(err)
+		}
+
+		if *debug {
+			fmt.Printf("Saving current mac address %s to %s\n", currentMacAddress, interfaceStore)
 		}
 
 		currentInterface := networkInterface{
@@ -112,7 +113,7 @@ func main() {
 	}
 
 	if *debug {
-		fmt.Printf("Setting mac to %s with connection rating %s\n", bestDevice.Address, bestDevice.Rating)
+		fmt.Printf("Setting mac to %s with connection rating %d\n", bestDevice.Address, bestDevice.Rating)
 	}
 	setMac(*targetInterface, bestDevice.Address)
 
