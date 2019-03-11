@@ -57,7 +57,7 @@ func rateConnections(
 			return nil, err
 		}
 
-		time.Sleep(10 * time.Second)
+		time.Sleep(15 * time.Second)
 
 		if *debug {
 			fmt.Println("Testing connection...")

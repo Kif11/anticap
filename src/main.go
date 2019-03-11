@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -20,9 +21,11 @@ type networkInterface struct {
 }
 
 var defaultTarget, err = getRouterAddress()
-var debug = flag.Bool("v", false, "verbose output")
-var captureOnly = flag.Bool("s", false, "run packet capture and exit")
+var spoofMac = flag.String("s", "", "set target interface mac to this one and exit")
 var resetOriginal = flag.Bool("r", false, "reset to original mac address and exit")
+var debug = flag.Bool("v", false, "verbose output")
+var captureOnly = flag.Bool("c", false, "run packet capture and exit")
+var printCaptures = flag.Bool("l", false, "list stored captures")
 var targetInterface = flag.String("i", "en0", "name of wifi interface, use ifconfig to find out")
 var targetDevice = flag.String("t", defaultTarget, "mac address of target wifi network")
 var maxNumPackets = flag.Int("n", 100, "number of packets to capture before stop")
@@ -47,14 +50,28 @@ func main() {
 	}
 
 	if *resetOriginal {
-		i := networkInterface{}
-		if err := db.Read("interfaces", *targetInterface, &i); err != nil {
-			panic(err)
+		if err := resetOriginalMac(db, *targetInterface); err != nil {
+			fmt.Println("Can not restore original mac", err)
 		}
-		if *debug {
-			fmt.Printf("Resseting mac address to %s for %s\n", i.Address, *targetInterface)
+		return
+	} else if *printCaptures {
+		records, err := db.ReadAll(*targetDevice)
+		if err != nil {
+			fmt.Println("Error", err)
 		}
-		setMac(*targetInterface, i.Address)
+
+		for _, d := range records {
+			device := device{}
+			if err := json.Unmarshal([]byte(d), &device); err != nil {
+				fmt.Println("Error", err)
+			}
+
+			fmt.Println(device.Address, device.PCount, device.Rating)
+		}
+
+		return
+	} else if *spoofMac != "" {
+		setMac(*targetInterface, *spoofMac)
 		return
 	}
 
@@ -77,13 +94,6 @@ func main() {
 
 		db.Write("interfaces", *targetInterface, currentInterface)
 	}
-
-	// records, err := db.ReadAll("fc:ec:da:36:93:d4")
-	// if err != nil {
-	// 	fmt.Println("Error", err)
-	// }
-
-	// fmt.Println(records)
 
 	if *debug {
 		fmt.Printf("Starting packet capture on %s for %s hotspot\n", *targetInterface, *targetDevice)
@@ -109,6 +119,11 @@ func main() {
 		if *debug {
 			fmt.Println("Non of the devices has internet access. Exiting!")
 		}
+
+		if err := resetOriginalMac(db, *targetInterface); err != nil {
+			fmt.Println("Can not restore original mac", err)
+		}
+
 		return
 	}
 

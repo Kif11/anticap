@@ -3,10 +3,13 @@ package main
 import (
 	"bufio"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"os/exec"
 	"strings"
+
+	scribble "github.com/nanobox-io/golang-scribble"
 )
 
 func getMac(interfc string) (string, error) {
@@ -75,4 +78,18 @@ func isSudo() bool {
 		return true
 	}
 	return false
+}
+
+func resetOriginalMac(db *scribble.Driver, interfc string) error {
+	i := networkInterface{}
+	if err := db.Read("interfaces", interfc, &i); err != nil {
+		return err
+	}
+	if *debug {
+		fmt.Printf("Resseting mac address to %s for %s\n", i.Address, interfc)
+	}
+
+	setMac(interfc, i.Address)
+
+	return nil
 }
