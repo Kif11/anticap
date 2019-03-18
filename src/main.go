@@ -29,6 +29,7 @@ var printCaptures = flag.Bool("l", false, "list stored captures")
 var targetInterface = flag.String("i", "en0", "name of wifi interface, use ifconfig to find out")
 var targetDevice = flag.String("t", defaultTarget, "mac address of target wifi network")
 var maxNumPackets = flag.Int("n", 100, "number of packets to capture before stop")
+var useFirstWorking = flag.Bool("f", false, "use first working connection instead of testing all discovered devices")
 
 func main() {
 	flag.Parse()

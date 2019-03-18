@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
+	"os/exec"
+	"strings"
 	"time"
 
 	scribble "github.com/nanobox-io/golang-scribble"
@@ -57,7 +60,24 @@ func rateConnections(
 			return nil, err
 		}
 
-		time.Sleep(15 * time.Second)
+		// Wait until WiFi interface is connected
+		for {
+			out, err := exec.Command("networksetup", "-getairportnetwork", "en0").Output()
+			if err != nil {
+				return nil, err
+			}
+
+			s := string(out[:])
+			scanner := bufio.NewScanner(strings.NewReader(s))
+
+			scanner.Scan()
+			text := scanner.Text()
+
+			if strings.HasPrefix(text, "Current Wi-Fi Network:") {
+				break
+			}
+			time.Sleep(1 * time.Second)
+		}
 
 		if *debug {
 			fmt.Println("Testing connection...")
@@ -76,6 +96,10 @@ func rateConnections(
 		db.Write(targetDevice, address, d)
 
 		rated[address] = d
+
+		if *useFirstWorking && connectionScore > 0 {
+			break
+		}
 	}
 	return rated, nil
 }
