@@ -105,11 +105,14 @@ func main() {
 		panic(err)
 	}
 
+	sortedDevices := sortDevices(devices)
+	fmt.Println("Sorted devices", sortedDevices)
+
 	if *captureOnly {
 		return
 	}
 
-	ratedDevices, err := rateConnections(db, *targetInterface, *targetDevice, devices)
+	ratedDevices, err := rateConnections(db, *targetInterface, *targetDevice, sortedDevices)
 	if err != nil {
 		panic(err)
 	}

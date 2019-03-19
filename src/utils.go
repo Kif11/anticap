@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 
 	scribble "github.com/nanobox-io/golang-scribble"
@@ -92,4 +93,17 @@ func resetOriginalMac(db *scribble.Driver, interfc string) error {
 	setMac(interfc, i.Address)
 
 	return nil
+}
+
+func sortDevices(devices map[string]device) []device {
+	var deviceArray []device
+	for _, d := range devices {
+		deviceArray = append(deviceArray, d)
+	}
+
+	sort.SliceStable(deviceArray, func(i, j int) bool {
+		return deviceArray[i].PCount > deviceArray[j].PCount
+	})
+
+	return deviceArray
 }

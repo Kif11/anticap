@@ -48,15 +48,15 @@ func rateConnections(
 	db *scribble.Driver,
 	intrfc string,
 	targetDevice string,
-	devices map[string]device) (map[string]device, error) {
+	devices []device) ([]device, error) {
 
-	rated := make(map[string]device)
-	for address, d := range devices {
+	var rated []device
+	for _, d := range devices {
 		if *debug {
-			fmt.Println("Setting mac to", address)
+			fmt.Println("Setting mac to", d.Address)
 		}
 
-		if err := setMac(intrfc, address); err != nil {
+		if err := setMac(intrfc, d.Address); err != nil {
 			return nil, err
 		}
 
@@ -74,6 +74,10 @@ func rateConnections(
 			text := scanner.Text()
 
 			if strings.HasPrefix(text, "Current Wi-Fi Network:") {
+				if *debug {
+					fmt.Println(text)
+				}
+				time.Sleep(8 * time.Second)
 				break
 			}
 			time.Sleep(1 * time.Second)
@@ -93,9 +97,9 @@ func rateConnections(
 
 		d.Rating = connectionScore
 
-		db.Write(targetDevice, address, d)
+		db.Write(targetDevice, d.Address, d)
 
-		rated[address] = d
+		rated = append(rated, d)
 
 		if *useFirstWorking && connectionScore > 0 {
 			break
@@ -104,16 +108,16 @@ func rateConnections(
 	return rated, nil
 }
 
-func getBestDevice(devices map[string]device) device {
-	bestAddress := ""
+func getBestDevice(devices []device) device {
+	bestIndex := 0
 	bestRating := 0
 
-	for address, d := range devices {
+	for i, d := range devices {
 		if d.Rating > bestRating {
 			bestRating = d.Rating
-			bestAddress = address
+			bestIndex = i
 		}
 	}
 
-	return devices[bestAddress]
+	return devices[bestIndex]
 }
