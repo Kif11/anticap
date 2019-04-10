@@ -21,6 +21,21 @@ func getMac(interfc string) (string, error) {
 	return netInterface.HardwareAddr.String(), nil
 }
 
+func repairMac(mac string) string {
+	parts := strings.Split(mac, ":")
+
+	var newParts []string
+
+	for _, p := range parts {
+		if len(p) == 1 {
+			p = "0" + p
+		}
+		newParts = append(newParts, p)
+	}
+
+	return strings.Join(newParts, ":")
+}
+
 func getRouterAddress() (string, error) {
 	airportBin := "/System/Library/PrivateFrameworks/Apple80211.framework/Versions/A/Resources/airport"
 
@@ -40,6 +55,8 @@ func getRouterAddress() (string, error) {
 		}
 		text = strings.TrimSpace(text)
 		text = strings.Replace(text, "BSSID: ", "", 1)
+		text = repairMac(text)
+
 		return text, nil
 	}
 	return "", errors.New("can not find BSSID in airport output")

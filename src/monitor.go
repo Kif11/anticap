@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"text/tabwriter"
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
@@ -97,9 +99,16 @@ func monitor(db *scribble.Driver, intrfc string, targetDevice string, maxNumPack
 	if !*quite {
 		fmt.Printf("\nTotal %d devices discovered\n\n", len(devices))
 
+		const padding = 4
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, padding, ' ', tabwriter.AlignRight)
+
+		fmt.Fprintln(w, "Address\tPackets\t")
+		fmt.Fprintln(w, "\t")
 		for _, d := range sortedDevices {
-			fmt.Printf("%s: %d\n", d.Address, d.PCount)
+			fmt.Fprintf(w, "%s\t%d\t\n", d.Address, d.PCount)
 		}
+		fmt.Fprintln(w, "\t")
+		w.Flush()
 	}
 
 	return sortedDevices, nil

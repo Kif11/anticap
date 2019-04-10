@@ -74,9 +74,6 @@ func rateConnections(
 			text := scanner.Text()
 
 			if strings.HasPrefix(text, "Current Wi-Fi Network:") {
-				if !*quite {
-					fmt.Println(text)
-				}
 				time.Sleep(8 * time.Second)
 				break
 			}

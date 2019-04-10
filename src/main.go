@@ -25,7 +25,7 @@ var spoofMac = flag.String("s", "", "set target interface mac to this one and ex
 var resetOriginal = flag.Bool("r", false, "reset to original mac address and exit")
 var quite = flag.Bool("q", false, "do not print logs")
 var captureOnly = flag.Bool("c", false, "run packet capture and exit")
-var listCapturesTarget = flag.String("l", "", "list stored captures for target mac")
+var listCaptures = flag.Bool("l", false, "list stored captures for target mac")
 var targetInterface = flag.String("i", "en0", "name of wifi interface, use ifconfig to find out")
 var targetDevice = flag.String("t", defaultTarget, "mac address of target wifi network")
 var maxNumPackets = flag.Int("n", 300, "number of packets to capture before stop")
@@ -54,10 +54,10 @@ func main() {
 			fmt.Println("Can not restore original mac", err)
 		}
 		return
-	} else if *listCapturesTarget != "" {
-		records, err := db.ReadAll(*listCapturesTarget)
+	} else if *listCaptures {
+		records, err := db.ReadAll(*targetDevice)
 		if err != nil {
-			fmt.Println("Error", err)
+			fmt.Println("Error reading database.", err)
 		}
 
 		devices := make(map[string]device)
@@ -65,7 +65,7 @@ func main() {
 		for _, d := range records {
 			device := device{}
 			if err := json.Unmarshal([]byte(d), &device); err != nil {
-				fmt.Println("Error", err)
+				fmt.Println("Error unmarshalling db entry.", err)
 			}
 
 			devices[device.Address] = device
