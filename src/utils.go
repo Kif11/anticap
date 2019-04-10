@@ -86,7 +86,7 @@ func resetOriginalMac(db *scribble.Driver, interfc string) error {
 	if err := db.Read("interfaces", interfc, &i); err != nil {
 		return err
 	}
-	if *debug {
+	if !*quite {
 		fmt.Printf("Resseting mac address to %s for %s\n", i.Address, interfc)
 	}
 

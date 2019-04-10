@@ -23,13 +23,12 @@ type networkInterface struct {
 var defaultTarget, err = getRouterAddress()
 var spoofMac = flag.String("s", "", "set target interface mac to this one and exit")
 var resetOriginal = flag.Bool("r", false, "reset to original mac address and exit")
-var debug = flag.Bool("v", false, "verbose output")
+var quite = flag.Bool("q", false, "do not print logs")
 var captureOnly = flag.Bool("c", false, "run packet capture and exit")
-var printCaptures = flag.Bool("l", false, "list stored captures")
+var listCapturesTarget = flag.String("l", "", "list stored captures for target mac")
 var targetInterface = flag.String("i", "en0", "name of wifi interface, use ifconfig to find out")
 var targetDevice = flag.String("t", defaultTarget, "mac address of target wifi network")
-var maxNumPackets = flag.Int("n", 100, "number of packets to capture before stop")
-var useFirstWorking = flag.Bool("f", false, "use first working connection instead of testing all discovered devices")
+var maxNumPackets = flag.Int("n", 300, "number of packets to capture before stop")
 
 func main() {
 	flag.Parse()
@@ -55,11 +54,13 @@ func main() {
 			fmt.Println("Can not restore original mac", err)
 		}
 		return
-	} else if *printCaptures {
-		records, err := db.ReadAll(*targetDevice)
+	} else if *listCapturesTarget != "" {
+		records, err := db.ReadAll(*listCapturesTarget)
 		if err != nil {
 			fmt.Println("Error", err)
 		}
+
+		devices := make(map[string]device)
 
 		for _, d := range records {
 			device := device{}
@@ -67,7 +68,11 @@ func main() {
 				fmt.Println("Error", err)
 			}
 
-			fmt.Println(device.Address, device.PCount, device.Rating)
+			devices[device.Address] = device
+		}
+
+		for _, d := range sortDevices(devices) {
+			fmt.Printf("%s %d\n", d.Address, d.PCount)
 		}
 
 		return
@@ -84,7 +89,7 @@ func main() {
 			panic(err)
 		}
 
-		if *debug {
+		if !*quite {
 			fmt.Printf("Saving current mac address %s to %s\n", currentMacAddress, interfaceStore)
 		}
 
@@ -96,7 +101,7 @@ func main() {
 		db.Write("interfaces", *targetInterface, currentInterface)
 	}
 
-	if *debug {
+	if !*quite {
 		fmt.Printf("Starting packet capture on %s for %s hotspot\n", *targetInterface, *targetDevice)
 	}
 
@@ -105,14 +110,14 @@ func main() {
 		panic(err)
 	}
 
-	sortedDevices := sortDevices(devices)
-	fmt.Println("Sorted devices", sortedDevices)
+	// sortedDevices := sortDevices(devices)
+	// fmt.Println("Sorted devices", sortedDevices)
 
 	if *captureOnly {
 		return
 	}
 
-	ratedDevices, err := rateConnections(db, *targetInterface, *targetDevice, sortedDevices)
+	ratedDevices, err := rateConnections(db, *targetInterface, *targetDevice, devices)
 	if err != nil {
 		panic(err)
 	}
@@ -120,7 +125,7 @@ func main() {
 	bestDevice := getBestDevice(ratedDevices)
 
 	if bestDevice.Rating == 0 {
-		if *debug {
+		if !*quite {
 			fmt.Println("Non of the devices has internet access. Exiting!")
 		}
 
@@ -131,7 +136,7 @@ func main() {
 		return
 	}
 
-	if *debug {
+	if !*quite {
 		fmt.Printf("Setting mac to %s with connection rating %d\n", bestDevice.Address, bestDevice.Rating)
 	}
 	setMac(*targetInterface, bestDevice.Address)

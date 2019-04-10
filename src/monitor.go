@@ -19,7 +19,7 @@ func handlePacket(p gopacket.Packet) *layers.Dot11 {
 	return nil
 }
 
-func monitor(db *scribble.Driver, intrfc string, targetDevice string, maxNumPackets int) (map[string]device, error) {
+func monitor(db *scribble.Driver, intrfc string, targetDevice string, maxNumPackets int) ([]device, error) {
 	handle, err := pcap.OpenLive(intrfc, 65536, true, pcap.BlockForever)
 	if err != nil {
 		return nil, err
@@ -38,7 +38,7 @@ func monitor(db *scribble.Driver, intrfc string, targetDevice string, maxNumPack
 
 	bpfFilter := fmt.Sprintf("ether src %s and not ether host ff:ff:ff:ff:ff:ff and not ether host %s", targetDevice, currentMac)
 
-	if *debug {
+	if !*quite {
 		fmt.Println("BPF Filter: ", bpfFilter)
 	}
 
@@ -71,12 +71,6 @@ func monitor(db *scribble.Driver, intrfc string, targetDevice string, maxNumPack
 			continue
 		}
 
-		devicePair := fmt.Sprintf("%s %s\n", dstAddr, srcAddr)
-
-		if *debug {
-			fmt.Printf(devicePair)
-		}
-
 		var newDevice device
 
 		if val, ok := devices[dstAddr.String()]; ok {
@@ -85,32 +79,28 @@ func monitor(db *scribble.Driver, intrfc string, targetDevice string, maxNumPack
 		} else {
 			newDevice = device{
 				Address: dstAddr.String(),
-				PCount:  0,
+				PCount:  1,
 				Rating:  0,
 			}
+		}
+
+		if !*quite {
+			fmt.Printf("%s %d\n", dstAddr, newDevice.PCount)
 		}
 
 		devices[dstAddr.String()] = newDevice
 
 		db.Write(srcAddr.String(), dstAddr.String(), newDevice)
-
-		// // If the file doesn't exist, create it, or append to the file
-		// f, err := os.OpenFile(*outFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-		// if err != nil {
-		// 	log.Fatal(err)
-		// }
-		// defer f.Close()
-
-		// if _, err := f.Write([]byte(devicePair)); err != nil {
-		// 	log.Fatal(err)
-		// }
-
-		// devices = append(devices, devicePair)
 	}
 
-	if *debug {
-		fmt.Printf("Total %d devices discovered\n", len(devices))
+	sortedDevices := sortDevices(devices)
+	if !*quite {
+		fmt.Printf("\nTotal %d devices discovered\n\n", len(devices))
+
+		for _, d := range sortedDevices {
+			fmt.Printf("%s: %d\n", d.Address, d.PCount)
+		}
 	}
 
-	return devices, nil
+	return sortedDevices, nil
 }

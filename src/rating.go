@@ -17,7 +17,7 @@ func rateConnection(pingCount int) (int, error) {
 		return 0, err
 	}
 
-	if *debug {
+	if !*quite {
 		pinger.OnRecv = func(pkt *ping.Packet) {
 			fmt.Printf("%d bytes from %s: icmp_seq=%d time=%v\n",
 				pkt.Nbytes, pkt.IPAddr, pkt.Seq, pkt.Rtt)
@@ -52,7 +52,7 @@ func rateConnections(
 
 	var rated []device
 	for _, d := range devices {
-		if *debug {
+		if !*quite {
 			fmt.Println("Setting mac to", d.Address)
 		}
 
@@ -74,7 +74,7 @@ func rateConnections(
 			text := scanner.Text()
 
 			if strings.HasPrefix(text, "Current Wi-Fi Network:") {
-				if *debug {
+				if !*quite {
 					fmt.Println(text)
 				}
 				time.Sleep(8 * time.Second)
@@ -83,7 +83,7 @@ func rateConnections(
 			time.Sleep(1 * time.Second)
 		}
 
-		if *debug {
+		if !*quite {
 			fmt.Println("Testing connection...")
 		}
 		connectionScore, err := rateConnection(5)
@@ -91,7 +91,7 @@ func rateConnections(
 			fmt.Println(err)
 			connectionScore = 0
 		}
-		if *debug {
+		if !*quite {
 			fmt.Printf("Connection rated %d out of 10\n", connectionScore)
 		}
 
@@ -101,7 +101,7 @@ func rateConnections(
 
 		rated = append(rated, d)
 
-		if *useFirstWorking && connectionScore > 0 {
+		if connectionScore > 0 {
 			break
 		}
 	}
