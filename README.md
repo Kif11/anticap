@@ -1,6 +1,7 @@
 # Anti Captive Portals
 
 Bypass captive portals and get free WiFi easy 😝
+With great power comes great responsobility! Please use it wisely.
 
 To build
 ```
@@ -9,18 +10,16 @@ To build
 
 To run
 ```
-cd build
-./anticap
+./build/anticap
 ```
 
-Use `-h` flag to get more help on different options. Use `-v` to show log output.
+Use `-h` flag to get more help on different options.
 
 ## What does this tool do exactly?
 
-1. Capture packets in monitor mode for a given WiFi network
-2. Go through the list of discover devices and try to access internet
-3. Derive some connection rating based on the previous step
-4. Pick a device with the best connection and set your mac address to this device
+1. Capture packets in monitor mode for a given WiFi network to discover connected devices
+2. Spoof your mac to every discovered address and try to ping google.com
+4. If mac address has a positive connection keep it as your current one
 
 This tool is tested on Mojave 10.14.2 with
 Card Type:	AirPort Extreme  (0x14E4, 0x133)
