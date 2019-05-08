@@ -24,13 +24,13 @@ Use `-h` flag to get more help on different options.
 
 ## What does this tool do exactly?
 
-This tool sets your WiFi card to monitor mode in order to listen for network packets from all of the devices nearby. Each of this packet contains MAC address which is unique to every device. Since captive portals use MAC addresses to identify users if you spoof your MAC to a logged in user you can use internet on their behalf. Keep in mind that this situation will lead to packets collision if other person using Internet actively. In this case both of you will have bad browsing experience 🙁
+This tool sets your WiFi card to monitor mode in order to listen for network packets from all of the devices nearby. Each of these packets contain a MAC address which is unique to every device. Since captive portals use MAC addresses to identify users, if you spoof your MAC address to a logged in user, you can access the internet on their behalf. Keep in mind that this situation will lead to packet collision if the other person is using the Internet actively. In this case, both of you will have a bad browsing experience ￼🙁
 
 The general pipeline consist of three steps.
 
 ### Discovery
 
-Capture packets in monitor mode for a given WiFi network to discover connected devices. All captured MACs are stored as JSON text files in `<cwd>/store` directory.
+Capture packets in monitor mode for a given WiFi network to discover connected devices. All captured MACs are stored as JSON text files in `<cwd>/store` directory.
 
 ### Connection rating
 
@@ -38,7 +38,7 @@ Spoof your mac to every discovered address and try to ping `google.com`. For eac
 
 ### Spoofing
 
-If mac address has a Internet connection set it as your current one.
+If mac address has an Internet connection set it as your current one.
 
 ## Additional Info
 
