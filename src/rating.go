@@ -51,8 +51,10 @@ func rateConnections(
 	devices []device) ([]device, error) {
 
 	var rated []device
-	for _, d := range devices {
+	var devicesLen = len(devices)
+	for i, d := range devices {
 		if !*quite {
+			fmt.Printf("Testing device %d of %d\n", i+1, devicesLen)
 			fmt.Println("Setting mac to", d.Address)
 		}
 
