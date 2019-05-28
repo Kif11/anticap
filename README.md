@@ -2,9 +2,7 @@
 
 ![coffee](https://user-images.githubusercontent.com/8003487/57241899-122a0280-706d-11e9-9241-626895bf4eae.png)
 
-Bypass captive portals and get free WiFi easy 😝
-
-⚠️ With great power comes great responsibility! Please use it wisely.
+Bypass captive portals and get free WiFi easy 😝 With great power comes great responsibility! Please use it wisely.
 
 You can download latest ready to use [anticap 1.0.1 here](https://github.com/Kif11/anticap/releases/download/v1.0.1/anticap). Other versions are available under Releases.
 
