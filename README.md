@@ -1,6 +1,6 @@
 # Anti Captive Portals
 
-![coffee](https://user-images.githubusercontent.com/8003487/57241899-122a0280-706d-11e9-9241-626895bf4eae.png)
+![coffee](https://user-images.githubusercontent.com/8003487/60137709-a3a81d80-975c-11e9-8596-896390227c4e.png)
 
 Bypass captive portals and get free WiFi easy 😝
 
