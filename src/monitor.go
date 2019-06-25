@@ -40,7 +40,7 @@ func monitor(db *scribble.Driver, intrfc string, targetDevice string, maxNumPack
 
 	bpfFilter := fmt.Sprintf("ether src %s and not ether host ff:ff:ff:ff:ff:ff and not ether host %s", targetDevice, currentMac)
 
-	if !*quite {
+	if !*quiet {
 		fmt.Println("BPF Filter: ", bpfFilter)
 	}
 
@@ -86,7 +86,7 @@ func monitor(db *scribble.Driver, intrfc string, targetDevice string, maxNumPack
 			}
 		}
 
-		if !*quite {
+		if !*quiet {
 			fmt.Printf("%s %d\n", dstAddr, newDevice.PCount)
 		}
 
@@ -96,7 +96,7 @@ func monitor(db *scribble.Driver, intrfc string, targetDevice string, maxNumPack
 	}
 
 	sortedDevices := sortDevices(devices)
-	if !*quite {
+	if !*quiet {
 		fmt.Printf("\nTotal %d devices discovered\n\n", len(devices))
 
 		const padding = 4

@@ -23,7 +23,7 @@ type networkInterface struct {
 var defaultTarget, err = getRouterAddress()
 var spoofMac = flag.String("s", "", "set target interface mac to this one and exit")
 var resetOriginal = flag.Bool("r", false, "reset to original mac address and exit")
-var quite = flag.Bool("q", false, "do not print logs")
+var quiet = flag.Bool("q", false, "do not print logs")
 var captureOnly = flag.Bool("c", false, "run packet capture and exit")
 var listCaptures = flag.Bool("l", false, "list stored captures for target mac")
 var targetInterface = flag.String("i", "en0", "name of wifi interface, use ifconfig to find out")
@@ -89,7 +89,7 @@ func main() {
 			panic(err)
 		}
 
-		if !*quite {
+		if !*quiet {
 			fmt.Printf("Saving current mac address %s to %s\n", currentMacAddress, interfaceStore)
 		}
 
@@ -101,7 +101,7 @@ func main() {
 		db.Write("interfaces", *targetInterface, currentInterface)
 	}
 
-	if !*quite {
+	if !*quiet {
 		fmt.Printf("Starting packet capture on %s for %s hotspot\n", *targetInterface, *targetDevice)
 	}
 
@@ -125,7 +125,7 @@ func main() {
 	bestDevice := getBestDevice(ratedDevices)
 
 	if bestDevice.Rating == 0 {
-		if !*quite {
+		if !*quiet {
 			fmt.Println("Non of the devices has internet access. Exiting!")
 		}
 
@@ -136,7 +136,7 @@ func main() {
 		return
 	}
 
-	if !*quite {
+	if !*quiet {
 		fmt.Printf("Setting mac to %s with connection rating %d\n", bestDevice.Address, bestDevice.Rating)
 	}
 	setMac(*targetInterface, bestDevice.Address)
