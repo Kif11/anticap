@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"log"
 	"os"
+	"os/signal"
 
 	scribble "github.com/nanobox-io/golang-scribble"
 )
@@ -105,6 +107,12 @@ func main() {
 		fmt.Printf("Starting packet capture on %s for %s hotspot\n", *targetInterface, *targetDevice)
 	}
 
+	// On newer mac it is required to dissociate from active WiFi network before using monitor mode
+	err = dissociateWiFi()
+	if err != nil {
+		panic(err)
+	}
+
 	devices, err := monitor(db, *targetInterface, *targetDevice, *maxNumPackets)
 	if err != nil {
 		panic(err)
@@ -140,6 +148,16 @@ func main() {
 		fmt.Printf("Setting mac to %s with connection rating %d\n", bestDevice.Address, bestDevice.Rating)
 	}
 	setMac(*targetInterface, bestDevice.Address)
+
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt)
+	go func() {
+		for range c {
+			// sig is a ^C, handle it
+			log.Println("Terminated by user")
+			os.Exit(0)
+		}
+	}()
 
 	return
 }

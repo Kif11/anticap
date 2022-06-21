@@ -13,6 +13,8 @@ import (
 	scribble "github.com/nanobox-io/golang-scribble"
 )
 
+const airportBin = "/System/Library/PrivateFrameworks/Apple80211.framework/Versions/A/Resources/airport"
+
 func getMac(interfc string) (string, error) {
 	netInterface, err := net.InterfaceByName(interfc)
 	if err != nil {
@@ -37,8 +39,6 @@ func repairMac(mac string) string {
 }
 
 func getRouterAddress() (string, error) {
-	airportBin := "/System/Library/PrivateFrameworks/Apple80211.framework/Versions/A/Resources/airport"
-
 	out, err := exec.Command(airportBin, "-I").Output()
 
 	if err != nil {
@@ -59,14 +59,20 @@ func getRouterAddress() (string, error) {
 
 		return text, nil
 	}
+
 	return "", errors.New("can not find BSSID in airport output")
 }
 
-func setMac(interfc string, mac string) error {
-	airportBin := "/System/Library/PrivateFrameworks/Apple80211.framework/Versions/A/Resources/airport"
-
-	// Dissociate from WiFi network
+func dissociateWiFi() error {
 	if err := exec.Command(airportBin, "-z").Run(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func setMac(interfc string, mac string) error {
+	if err := dissociateWiFi(); err != nil {
 		return err
 	}
 

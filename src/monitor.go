@@ -21,8 +21,8 @@ func handlePacket(p gopacket.Packet) *layers.Dot11 {
 	return nil
 }
 
-func monitor(db *scribble.Driver, intrfc string, targetDevice string, maxNumPackets int) ([]device, error) {
-	handle, err := pcap.OpenLive(intrfc, 65536, true, pcap.BlockForever)
+func monitor(db *scribble.Driver, iface string, targetDevice string, maxNumPackets int) ([]device, error) {
+	handle, err := pcap.OpenLive(iface, 65536, true, pcap.BlockForever)
 	if err != nil {
 		return nil, err
 	}
@@ -33,12 +33,13 @@ func monitor(db *scribble.Driver, intrfc string, targetDevice string, maxNumPack
 		return nil, err
 	}
 
-	currentMac, err := getMac(intrfc)
+	currentMac, err := getMac(iface)
 	if err != nil {
 		return nil, err
 	}
 
 	bpfFilter := fmt.Sprintf("ether src %s and not ether host ff:ff:ff:ff:ff:ff and not ether host %s", targetDevice, currentMac)
+	// bpfFilter := ""
 
 	if !*quiet {
 		fmt.Println("BPF Filter: ", bpfFilter)

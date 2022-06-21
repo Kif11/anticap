@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
+	ping "github.com/go-ping/ping"
 	scribble "github.com/nanobox-io/golang-scribble"
-	ping "github.com/sparrc/go-ping"
 )
 
 func rateConnection(pingCount int) (int, error) {
