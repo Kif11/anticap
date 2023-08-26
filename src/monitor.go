@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"text/tabwriter"
 
 	"github.com/google/gopacket"
@@ -10,6 +11,20 @@ import (
 	"github.com/google/gopacket/pcap"
 	scribble "github.com/nanobox-io/golang-scribble"
 )
+
+// SetChannel changes the channel of the network interface.
+func setChannel(iface string, channel int) error {
+	// Command to change the channel
+	cmd := exec.Command("/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport", iface, "--channel="+fmt.Sprintf("%d", channel))
+
+	// Run the command
+	err := cmd.Run()
+	if err != nil {
+		return fmt.Errorf("failed to set channel: %w", err)
+	}
+
+	return nil
+}
 
 func handlePacket(p gopacket.Packet) *layers.Dot11 {
 	linkLayer := p.Layer(layers.LayerTypeDot11)
@@ -21,7 +36,12 @@ func handlePacket(p gopacket.Packet) *layers.Dot11 {
 	return nil
 }
 
-func monitor(db *scribble.Driver, iface string, targetDevice string, maxNumPackets int) ([]device, error) {
+func monitor(db *scribble.Driver, iface string, targetDevice string, channel int, maxNumPackets int) ([]device, error) {
+	err := setChannel(iface, channel)
+	if err != nil {
+		return nil, err
+	}
+
 	handle, err := pcap.OpenLive(iface, 65536, true, pcap.BlockForever)
 	if err != nil {
 		return nil, err

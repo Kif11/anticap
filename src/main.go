@@ -29,6 +29,7 @@ var quiet = flag.Bool("q", false, "do not print logs")
 var captureOnly = flag.Bool("c", false, "run packet capture and exit")
 var listCaptures = flag.Bool("l", false, "list stored captures for target mac")
 var targetInterface = flag.String("i", "en0", "name of wifi interface, use ifconfig to find out")
+var targetChannel = flag.Int("ch", 11, "target radio channels (1-14). use sudo airport -s to determine active channel")
 var targetDevice = flag.String("t", defaultTarget, "mac address of target wifi network")
 var maxNumPackets = flag.Int("n", 300, "number of packets to capture before stop")
 
@@ -104,7 +105,7 @@ func main() {
 	}
 
 	if !*quiet {
-		fmt.Printf("Starting packet capture on %s for %s hotspot\n", *targetInterface, *targetDevice)
+		fmt.Printf("Starting packet capture. Iface: %s Channel: %d, Target router: %s\n", *targetInterface, *targetChannel, *targetDevice)
 	}
 
 	// On newer mac it is required to dissociate from active WiFi network before using monitor mode
@@ -113,7 +114,7 @@ func main() {
 		panic(err)
 	}
 
-	devices, err := monitor(db, *targetInterface, *targetDevice, *maxNumPackets)
+	devices, err := monitor(db, *targetInterface, *targetDevice, 11, *maxNumPackets)
 	if err != nil {
 		panic(err)
 	}
