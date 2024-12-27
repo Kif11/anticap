@@ -114,7 +114,7 @@ func main() {
 		panic(err)
 	}
 
-	devices, err := monitor(db, *targetInterface, *targetDevice, 11, *maxNumPackets)
+	devices, err := monitor(db, *targetInterface, *targetDevice, *targetChannel, *maxNumPackets)
 	if err != nil {
 		panic(err)
 	}
