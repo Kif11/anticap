@@ -4,49 +4,85 @@
 
 Bypass captive portals and get free WiFi easy 😝
 
-You can download latest ready to use [anticap 1.0.1 here](https://github.com/Kif11/anticap/releases/download/v1.0.1/anticap). Other versions are available under Releases.
+## What does this tool do exactly?
 
-With great power comes great responsibility! Please use it wisely.
+This tool sets your WiFi card to monitor mode in order to listen for network packets from all of the devices nearby. Each of these packets contain a MAC address which is unique to every device. Since captive portals use MAC addresses to identify users, it is possible to spoof your MAC to a "logged in" user to be able to access the internet on their behalf. Keep in mind that this situation will lead to packet collision if the other person is using the Internet actively. In this case, both of you will have a bad browsing experience.
 
-## Usage
+The general workflow consists of several steps:
 
-To build
+### Discovery
+
+Capture packets in monitor mode for a given WiFi network to discover connected devices. All captured MACs are stored as JSON text files in `store` directory.
+
+Note that anticap also maintains a cache of discovered networks in `store/networks/{bssid}.json`. This cache maps BSSIDs to their SSIDs and channels.
+
+### Connection rating
+
+Spoof your MAC to every discovered address and try to ping external server to find if internet access is available. For each address N pings will be performed to determine a rating score. The higher the number of successful ping the higher the score.
+
+### Spoofing
+
+If tester MAC address has an Internet connection set it as your current one.
+
+## Build
+
 ```
 ./build.sh
 ```
 
-To run
+### Commands
+
+anticap uses a subcommand-based interface. Use `-h` flag with any command to get more help on available options.
+
+#### bypass
+Full process: packet capture, MAC spoof, and connection testing
 ```
-./build/anticap
+sudo ./build/anticap bypass -t <BSSID> [-ch <channel>] [-s <SSID>] [-i <interface>] [-n <num_packets>] [-v]
+```
+- `-t`: Target BSSID
+- `-ch`: Target channel
+- `-s`: Manually specify SSID
+- `-i`: Interface name
+- `-n`: Number of packets to capture
+- `-v`: Verbose output
+
+#### scan
+Scan available WiFi networks and populate cache
+```
+sudo ./build/anticap scan [-5g] [-dwell <seconds>] [-s] [-i <interface>] [-v]
+```
+- `-5g`: Include 5GHz channels
+- `-dwell`: Dwell time per channel in seconds
+- `-s`: Save discovered networks to cache
+- `-i`: Interface name
+- `-v`: Verbose output
+
+#### capture
+Run packet capture only (no MAC spoofing)
+```
+sudo ./build/anticap capture -t <BSSID> [-ch <channel>] [-i <interface>] [-n <num_packets>] [-v]
 ```
 
-Use `-h` flag to get more help on different options.
+#### join
+Join a specified WiFi network
+```
+sudo ./build/anticap join <SSID> [-p <password>] [-v]
+```
 
-## What does this tool do exactly?
+#### reset
+Reset interface to original MAC address
+```
+sudo ./build/anticap reset [-i <interface>] [-v]
+```
 
-This tool sets your WiFi card to monitor mode in order to listen for network packets from all of the devices nearby. Each of these packets contain a MAC address which is unique to every device. Since captive portals use MAC addresses to identify users, if you spoof your MAC address to a logged in user, you can access the internet on their behalf. Keep in mind that this situation will lead to packet collision if the other person is using the Internet actively. In this case, both of you will have a bad browsing experience ￼🙁
+#### setmac
+Set interface MAC address
+```
+sudo ./build/anticap setmac <MAC_ADDRESS> [-i <interface>] [-v]
+```
 
-The general pipeline consist of three steps.
-
-### Discovery
-
-Capture packets in monitor mode for a given WiFi network to discover connected devices. All captured MACs are stored as JSON text files in `<cwd>/store` directory.
-
-### Connection rating
-
-Spoof your mac to every discovered address and try to ping `google.com`. For each MAC anticap will try to perform five ping and save it to the local `store`.
-
-### Spoofing
-
-If mac address has an Internet connection set it as your current one.
-
-## Additional Info
-
-This tool was tested on Mojave 10.14.2 with
-WiFI Card:	AirPort Extreme  (0x14E4, 0x133)
-Firmware Version:	Broadcom BCM43xx 1.0 (7.77.61.1 AirPortDriverBrcmNIC-1305.2)
-
-Special thanks for people developed the following tools
-
-- https://github.com/feross/SpoofMAC
-- https://github.com/unixpickle/JamWiFi
+#### list
+List stored captures for target MAC (works without root)
+```
+./build/anticap list -t <BSSID> [-v]
+```

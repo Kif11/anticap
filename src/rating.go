@@ -9,7 +9,7 @@ import (
 )
 
 func rateConnection(pingCount int) (int, error) {
-	pinger, err := ping.NewPinger("www.google.com")
+	pinger, err := ping.NewPinger("duckduckgo.com")
 	if err != nil {
 		return 0, err
 	}
