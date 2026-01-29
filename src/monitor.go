@@ -412,13 +412,13 @@ func joinStrings(parts []string, sep string) string {
 	return result
 }
 
-// ScanForAccessPoints scans for WiFi access points by capturing beacon/probe response frames
+// scanForAccessPoints scans for WiFi access points by capturing beacon/probe response frames
 // This method can get actual BSSIDs even on modern macOS where airport utility is deprecated
 // and Swift Core WiFi utils require geo location permission to see BSSIDs
 // channels: list of channels to scan (e.g., []int{1,6,11} for 2.4GHz)
 // dwellTime: time to spend on each channel (e.g., 500ms)
 // Returns a map of BSSID -> AccessPoint
-func ScanForAccessPoints(iface string, channels []int, dwellTime time.Duration) (map[string]AccessPoint, error) {
+func scanForAccessPoints(iface string, channels []int, dwellTime time.Duration, verbose bool) (map[string]AccessPoint, error) {
 	accessPoints := make(map[string]AccessPoint)
 
 	handle, err := pcap.OpenLive(iface, 65536, true, pcap.BlockForever)
@@ -441,13 +441,13 @@ func ScanForAccessPoints(iface string, channels []int, dwellTime time.Duration) 
 
 	for _, channel := range channels {
 		if err := setChannel(iface, channel); err != nil {
-			if *verbose {
+			if verbose {
 				fmt.Printf("Warning: failed to set channel %d: %v\n", channel, err)
 			}
 			continue
 		}
 
-		if *verbose {
+		if verbose {
 			fmt.Printf("Scanning channel %d...\n", channel)
 		}
 
@@ -552,8 +552,8 @@ func getSecurityStrength(security string) int {
 	return 3
 }
 
-// SortAccessPoints converts map to slice and sorts by specified criteria
-func SortAccessPoints(aps map[string]AccessPoint, byWeakSecurity bool) []AccessPoint {
+// sortAccessPoints converts map to slice and sorts by specified criteria
+func sortAccessPoints(aps map[string]AccessPoint, byWeakSecurity bool) []AccessPoint {
 	// Convert map to slice
 	apList := make([]AccessPoint, 0, len(aps))
 	for _, ap := range aps {
@@ -580,27 +580,21 @@ func SortAccessPoints(aps map[string]AccessPoint, byWeakSecurity bool) []AccessP
 	return apList
 }
 
-// PrintAccessPoints displays discovered access points in a formatted table
+// printAccessPoints displays discovered access points in a formatted table
 // sortByWeakSecurity: if true, sort by security (weakest first); if false, sort by RSSI (strongest first)
-func PrintAccessPoints(aps map[string]AccessPoint, sortByWeakSecurity bool) {
+func printAccessPoints(aps map[string]AccessPoint, sortByWeakSecurity bool) {
 	if len(aps) == 0 {
 		fmt.Println("No access points found")
 		return
 	}
 
 	// Sort access points
-	apList := SortAccessPoints(aps, sortByWeakSecurity)
+	apList := sortAccessPoints(aps, sortByWeakSecurity)
 
 	const padding = 2
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, padding, ' ', tabwriter.AlignRight)
 
-	sortLabel := "(sorted by signal strength)"
-	if sortByWeakSecurity {
-		sortLabel = "(sorted by security - weakest first)"
-	}
-	fmt.Printf("\n%s\n\n", sortLabel)
-
-	fmt.Fprintln(w, "BSSID\tSSID\tChannel\tRSSI\tSecurity\t")
+	fmt.Fprintln(w, "\nBSSID\tSSID\tChannel\tRSSI\tSecurity\t")
 	fmt.Fprintln(w, "\t\t\t\t\t")
 	for _, ap := range apList {
 		ssid := ap.SSID
@@ -654,9 +648,7 @@ func monitor(db *scribble.Driver, iface string, targetDevice string, channel int
 	bpfFilter := fmt.Sprintf("ether src %s and not ether host ff:ff:ff:ff:ff:ff and not ether host %s", targetDevice, currentMac)
 	// bpfFilter := ""
 
-	if *verbose {
-		fmt.Println("BPF Filter: ", bpfFilter)
-	}
+	fmt.Println("BPF Filter: ", bpfFilter)
 
 	if err := handle.SetBPFFilter(bpfFilter); err != nil {
 		return nil, err
@@ -700,9 +692,7 @@ func monitor(db *scribble.Driver, iface string, targetDevice string, channel int
 			}
 		}
 
-		if *verbose {
-			fmt.Printf("%s %d\n", dstAddr, newDevice.PCount)
-		}
+		fmt.Printf("%s %d\n", dstAddr, newDevice.PCount)
 
 		devices[dstAddr.String()] = newDevice
 
@@ -710,20 +700,20 @@ func monitor(db *scribble.Driver, iface string, targetDevice string, channel int
 	}
 
 	sortedDevices := sortDevices(devices)
-	if *verbose {
-		fmt.Printf("\nTotal %d devices discovered\n\n", len(devices))
 
-		const padding = 4
-		w := tabwriter.NewWriter(os.Stdout, 0, 0, padding, ' ', tabwriter.AlignRight)
+	// Print report
+	fmt.Printf("\nTotal %d devices discovered\n\n", len(devices))
 
-		fmt.Fprintln(w, "Address\tPackets\t")
-		fmt.Fprintln(w, "\t")
-		for _, d := range sortedDevices {
-			fmt.Fprintf(w, "%s\t%d\t\n", d.Address, d.PCount)
-		}
-		fmt.Fprintln(w, "\t")
-		w.Flush()
+	const padding = 4
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, padding, ' ', tabwriter.AlignRight)
+
+	fmt.Fprintln(w, "Address\tPackets\t")
+	fmt.Fprintln(w, "\t")
+	for _, d := range sortedDevices {
+		fmt.Fprintf(w, "%s\t%d\t\n", d.Address, d.PCount)
 	}
+	fmt.Fprintln(w, "\t")
+	w.Flush()
 
 	return sortedDevices, nil
 }

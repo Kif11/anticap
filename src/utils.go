@@ -279,12 +279,12 @@ func isSudo() bool {
 	return false
 }
 
-func resetOriginalMac(db *scribble.Driver, interfc string) error {
+func resetOriginalMac(db *scribble.Driver, interfc string, verbose bool) error {
 	i := networkInterface{}
 	if err := db.Read("interfaces", interfc, &i); err != nil {
 		return err
 	}
-	if *verbose {
+	if verbose {
 		fmt.Printf("Resseting mac address to %s for %s\n", i.Address, interfc)
 	}
 
