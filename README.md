@@ -4,15 +4,21 @@
 
 Bypass captive portals and get free WiFi easy 😝
 
+## Motivation
+
+Today people have forgotten that Internet access is a basic human right. Admins who "just do their job" place captive portals with ads, phone number verification, and other abominations on otherwise open WiFi networks. This tool is made to overcome that inconvenience.
+
 ## What does this tool do exactly?
 
-This tool sets your WiFi card to monitor mode in order to listen for network packets from all of the devices nearby. Each of these packets contain a MAC address which is unique to every device. Since captive portals use MAC addresses to identify users, it is possible to spoof your MAC to a "logged in" user to be able to access the internet on their behalf. Keep in mind that this situation will lead to packet collision if the other person is using the Internet actively. In this case, both of you will have a bad browsing experience.
+This tool leverages 802.11 wireless protocol monitor mode to passively capture frames (packets) from all devices operating within range of the target access point (WiFi router). Each captured frame contains the client source MAC address. Captive portal implementations typically rely on MAC address-based authentication to maintain session state and enforce access control policies. By cloning the MAC address of an authenticated client, it becomes possible to inherit their existing authorization context and bypass the captive portal authentication mechanism.
+
+It should be noted that simultaneous usage of a spoofed MAC address while the legitimate client remains active will result in address conflicts and subsequent packet collisions. This will degrades network performance for both parties as the access point cannot deterministically send frames to the correct physical device. (the person who is closer to WiFi router will have much better time)
 
 The general workflow consists of several steps:
 
 ### Discovery
 
-Capture packets in monitor mode for a given WiFi network to discover connected devices. All captured MACs are stored as JSON text files in `store` directory.
+Capture packets in monitor mode for a given WiFi network to discover connected devices. All captured MACs are stored as JSON text files in `store` directory for later access.
 
 Note that anticap also maintains a cache of discovered networks in `store/networks/{bssid}.json`. This cache maps BSSIDs to their SSIDs and channels.
 
