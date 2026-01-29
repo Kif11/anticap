@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"time"
 
 	scribble "github.com/nanobox-io/golang-scribble"
@@ -21,6 +22,13 @@ type device struct {
 type networkInterface struct {
 	Name    string
 	Address string
+}
+
+// CachedNetwork represents cached network information
+type CachedNetwork struct {
+	BSSID   string `json:"bssid"`
+	SSID    string `json:"ssid"`
+	Channel int    `json:"channel"`
 }
 
 // Common 2.4GHz and 5GHz channels
@@ -123,8 +131,9 @@ func cmdBypass(db *scribble.Driver) {
 	bypassCmd := flag.NewFlagSet("bypass", flag.ExitOnError)
 	targetInterface := bypassCmd.String("i", "en0", "name of wifi interface")
 	targetDevice := bypassCmd.String("t", defaultTarget, "MAC address of target wifi network")
-	targetChannel := bypassCmd.Int("ch", 11, "target radio channel (1-14)")
+	targetChannel := bypassCmd.Int("ch", 0, "target radio channel (1-14)")
 	maxNumPackets := bypassCmd.Int("n", 300, "number of packets to capture")
+	manualSSID := bypassCmd.String("s", "", "manual SSID override (bypasses automatic resolution)")
 	verbose := bypassCmd.Bool("v", false, "output more information")
 
 	bypassCmd.Parse(os.Args[2:])
@@ -155,7 +164,41 @@ func cmdBypass(db *scribble.Driver) {
 		db.Write("interfaces", *targetInterface, currentInterface)
 	}
 
-	fmt.Printf("Starting packet capture. Iface: %s Channel: %d, Target router: %s\n", *targetInterface, *targetChannel, *targetDevice)
+	// Resolve SSID from BSSID
+	var ssid string
+	if *manualSSID != "" {
+		// Manual override provided
+		ssid = *manualSSID
+		if *verbose {
+			fmt.Printf("Using manual SSID override: %s\n", ssid)
+		}
+	} else {
+		// Try to resolve SSID automatically
+		resolvedSSID, err := resolveSSIDFromBSSID(*targetDevice, *targetInterface, *verbose)
+		if err != nil {
+			fmt.Printf("Failed to resolve SSID for BSSID %s: %v\n", *targetDevice, err)
+			fmt.Printf("\nSuggestions:\n")
+			fmt.Printf("  1. Use manual SSID override: anticap bypass -t %s -s \"YourNetworkName\"\n", *targetDevice)
+			fmt.Printf("  2. Run 'anticap scan' to populate the network cache\n")
+			os.Exit(1)
+		}
+		ssid = resolvedSSID
+		if *verbose {
+			fmt.Printf("Resolved SSID: %s\n", ssid)
+		}
+	}
+
+	if *targetChannel == 0 {
+		// If user didn't specify target channel try to resole it from cache
+		if net, err := getCachedNetwork(*targetDevice); err == nil {
+			*targetChannel = net.Channel
+		} else {
+			fmt.Println("Warning: Can not load target network channel from cache. Using default.")
+			*targetChannel = 11
+		}
+	}
+
+	fmt.Printf("Starting packet capture. Iface: %s Channel: %d, Target router: %s (SSID: %s)\n", *targetInterface, *targetChannel, *targetDevice, ssid)
 
 	// On newer mac it is required to dissociate from active WiFi network before using monitor mode
 	err := dissociateWiFi()
@@ -229,6 +272,11 @@ func cmdScan() {
 	if err != nil {
 		fmt.Printf("Error scanning for access points: %v\n", err)
 		return
+	}
+
+	// Populate network cache
+	if err := populateNetworkCache(aps, *verbose); err != nil {
+		fmt.Printf("Warning: failed to populate network cache: %v\n", err)
 	}
 
 	sortBySecurity := *sortBy == "security"
@@ -385,4 +433,113 @@ func cmdList(db *scribble.Driver) {
 	for _, d := range sortDevices(devices) {
 		fmt.Printf("%s %d\n", d.Address, d.PCount)
 	}
+}
+
+// resolveSSIDFromBSSID attempts to resolve SSID from BSSID using cache-first approach
+func resolveSSIDFromBSSID(bssid, iface string, verbose bool) (string, error) {
+	// First, try cache lookup
+	if net, err := getCachedNetwork(bssid); err == nil {
+		if verbose {
+			fmt.Printf("Found SSID in cache: %s -> %s\n", bssid, net.SSID)
+		}
+		return net.SSID, nil
+	}
+
+	// Cache miss, try full scan
+	fmt.Printf("SSID not in cache, performing scan for %s\n", bssid)
+
+	// Dissociate from current network to enable monitor mode
+	if err := dissociateWiFi(); err != nil {
+		if verbose {
+			fmt.Printf("Warning: failed to dissociate from WiFi: %v\n", err)
+		}
+	}
+
+	channels := append(defaultChannels2G, defaultChannels5G...)
+	dwellTime := 300 * time.Millisecond
+
+	aps, err := scanForAccessPoints(iface, channels, dwellTime, verbose)
+	if err != nil {
+		return "", fmt.Errorf("scan failed: %w", err)
+	}
+
+	// Update cache with scan results
+	if err := populateNetworkCache(aps, verbose); err != nil {
+		if verbose {
+			fmt.Printf("Warning: failed to populate cache: %v\n", err)
+		}
+	}
+
+	// Try cache lookup again
+	if net, err := getCachedNetwork(bssid); err == nil {
+		return net.SSID, nil
+	}
+
+	return "", fmt.Errorf("BSSID %s not found in scan results", bssid)
+}
+
+// getCachedNetwork retrieves SSID for given BSSID from cache
+func getCachedNetwork(bssid string) (CachedNetwork, error) {
+	cacheFile := filepath.Join("store", "networks", bssid+".json")
+
+	if _, err := os.Stat(cacheFile); os.IsNotExist(err) {
+		return CachedNetwork{}, fmt.Errorf("no cache entry for BSSID %s", bssid)
+	}
+
+	data, err := os.ReadFile(cacheFile)
+	if err != nil {
+		return CachedNetwork{}, fmt.Errorf("failed to read cache file: %w", err)
+	}
+
+	var info CachedNetwork
+	if err := json.Unmarshal(data, &info); err != nil {
+		return CachedNetwork{}, fmt.Errorf("failed to parse cache file: %w", err)
+	}
+
+	return info, nil
+}
+
+// populateNetworkCache stores discovered networks in individual cache files
+func populateNetworkCache(aps map[string]AccessPoint, verbose bool) error {
+	cacheDir := filepath.Join("store", "networks")
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		return fmt.Errorf("failed to create cache directory: %w", err)
+	}
+
+	count := 0
+	for bssid, ap := range aps {
+		// Skip networks without SSID
+		if ap.SSID == "" {
+			continue
+		}
+
+		info := CachedNetwork{
+			BSSID:   bssid,
+			SSID:    ap.SSID,
+			Channel: ap.Channel,
+		}
+
+		data, err := json.MarshalIndent(info, "", "  ")
+		if err != nil {
+			if verbose {
+				fmt.Printf("Warning: failed to marshal network info for %s: %v\n", bssid, err)
+			}
+			continue
+		}
+
+		cacheFile := filepath.Join(cacheDir, bssid+".json")
+		if err := os.WriteFile(cacheFile, data, 0644); err != nil {
+			if verbose {
+				fmt.Printf("Warning: failed to write cache file for %s: %v\n", bssid, err)
+			}
+			continue
+		}
+		count++
+	}
+
+	if verbose {
+		fmt.Printf("Cached %d networks in %s\n", count, cacheDir)
+	}
+
+	return nil
 }

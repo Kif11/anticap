@@ -1,10 +1,7 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
-	"os/exec"
-	"strings"
 	"time"
 
 	ping "github.com/go-ping/ping"
@@ -68,19 +65,16 @@ func rateConnections(
 
 		// Wait until WiFi interface is connected
 		for {
-			out, err := exec.Command("networksetup", "-getairportnetwork", "en0").Output()
+			fmt.Println("Waiting until wifi is connected...")
+
+			iface, err := getDefaultAirportInterfaceInfo()
 			if err != nil {
 				return nil, err
 			}
 
-			s := string(out[:])
-			scanner := bufio.NewScanner(strings.NewReader(s))
-
-			scanner.Scan()
-			text := scanner.Text()
-
-			if strings.HasPrefix(text, "Current Wi-Fi Network:") {
-				time.Sleep(8 * time.Second)
+			if iface.CurrentNetworkInfo != (NetworkInfo{}) {
+				fmt.Printf("Connected to %s\n", iface.CurrentNetworkInfo.Name)
+				time.Sleep(5 * time.Second)
 				break
 			}
 			time.Sleep(1 * time.Second)

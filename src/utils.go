@@ -177,6 +177,22 @@ func systemProfileAirportInfo() (*SystemProfilerResponse, error) {
 	return &spResponse, nil
 }
 
+func getDefaultAirportInterfaceInfo() (AirPortInterface, error) {
+	info, err := systemProfileAirportInfo()
+	if err != nil {
+		return AirPortInterface{}, err
+	}
+	if len(info.SPAirPortDataType) == 0 {
+		return AirPortInterface{}, fmt.Errorf("no SPAirPortDataType found")
+	}
+
+	if len(info.SPAirPortDataType[0].Interfaces) == 0 {
+		return AirPortInterface{}, fmt.Errorf("no airport interfaces found")
+	}
+
+	return info.SPAirPortDataType[0].Interfaces[0], nil
+}
+
 func getRouterAddress() (string, error) {
 	// Get the default gateway IP and then look up its MAC address in ARP table
 	cmd := exec.Command("sh", "-c", "arp -n $(route get default | grep gateway | awk '{print $2}')")
