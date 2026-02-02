@@ -559,14 +559,14 @@ func getSecurityStrength(security string) int {
 }
 
 // sortAccessPoints converts map to slice and sorts by specified criteria
-func sortAccessPoints(aps map[string]AccessPoint, byWeakSecurity bool) []AccessPoint {
+func sortAccessPoints(aps map[string]AccessPoint, sortType string) []AccessPoint {
 	// Convert map to slice
 	apList := make([]AccessPoint, 0, len(aps))
 	for _, ap := range aps {
 		apList = append(apList, ap)
 	}
 
-	if byWeakSecurity {
+	if sortType == "security" {
 		// Sort by security strength (weakest first), then by RSSI (strongest first) for ties
 		sort.Slice(apList, func(i, j int) bool {
 			strengthI := getSecurityStrength(apList[i].Security)
@@ -588,14 +588,14 @@ func sortAccessPoints(aps map[string]AccessPoint, byWeakSecurity bool) []AccessP
 
 // printAccessPoints displays discovered access points in a formatted table
 // sortByWeakSecurity: if true, sort by security (weakest first); if false, sort by RSSI (strongest first)
-func printAccessPoints(aps map[string]AccessPoint, sortByWeakSecurity bool) {
+func printAccessPoints(aps map[string]AccessPoint, sort string) {
 	if len(aps) == 0 {
 		fmt.Println("No access points found")
 		return
 	}
 
 	// Sort access points
-	apList := sortAccessPoints(aps, sortByWeakSecurity)
+	apList := sortAccessPoints(aps, sort)
 
 	const padding = 2
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, padding, ' ', tabwriter.AlignRight)

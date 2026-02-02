@@ -284,8 +284,7 @@ func cmdScan() {
 		fmt.Printf("Warning: failed to populate network cache: %v\n", err)
 	}
 
-	sortBySecurity := *sortBy == "security"
-	printAccessPoints(aps, sortBySecurity)
+	printAccessPoints(aps, *sortBy)
 }
 
 // cmdCapture runs packet capture only
