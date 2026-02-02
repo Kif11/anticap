@@ -55,10 +55,10 @@ sudo ./build/anticap bypass -t <BSSID> [-ch <channel>] [-s <SSID>] [-i <interfac
 #### scan
 Scan available WiFi networks and populate cache
 ```
-sudo ./build/anticap scan [-5g] [-dwell <seconds>] [-s] [-i <interface>] [-v]
+sudo ./build/anticap scan [-5g] [-t <milliseconds>] [-s] [-i <interface>] [-v]
 ```
 - `-5g`: Include 5GHz channels
-- `-dwell`: Dwell time per channel in seconds
+- `-t`: Scan time per channel in milliseconds
 - `-s`: Save discovered networks to cache
 - `-i`: Interface name
 - `-v`: Verbose output

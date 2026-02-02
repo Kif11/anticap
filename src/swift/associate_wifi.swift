@@ -74,9 +74,6 @@ do {
     do {
         try interface.associate(to: network, password: password)
         
-        // Wait for connection to establish
-        Thread.sleep(forTimeInterval: 2.0)
-        
         let connectedSSID = interface.ssid() ?? network.ssid ?? "Unknown"
         let connectedBSSID = interface.bssid() ?? "Unknown"
         
@@ -89,12 +86,17 @@ do {
         
     } catch let associateError as NSError {
         var errorMsg: String
+
+        // CoreWLAN error codes from Apple's official documentation
+        // Reference: https://github.com/keithrbennett/wifiwand/blob/master/swift/WifiNetworkConnector.swift
+        // Apple docs: https://developer.apple.com/documentation/corewlan/cwnetwork
         switch associateError.code {
-        case -3924: errorMsg = "Invalid password"
-        case -3925: errorMsg = "Network requires a password"
-        case -3905: errorMsg = "Operation timed out"
-        case -3906: errorMsg = "Association failed - network may be out of range"
-        case -3907: errorMsg = "Authentication failed - wrong password?"
+        case -3931: errorMsg = "Already connected to network" // kCWErrorAlreadyAssociated
+        case -3906: errorMsg = "Invalid password" // kCWErrorInvalidPassword
+        case -3905: errorMsg = "Network not found" // kCWErrorNetworkNotFound
+        case -3908: errorMsg = "Connection timeout" // kCWErrorTimeout
+        case -3903: errorMsg = "Authentication failed - might require captive portal login" // kCWErrorAuthenticationFailed
+        case -3900: errorMsg = "CoreWLAN error - possible keychain access or authentication issue" // kCWError (generic)
         default: errorMsg = "Association failed (code \(associateError.code)): \(associateError.localizedDescription)"
         }
         

@@ -14,9 +14,16 @@ import (
 )
 
 type device struct {
-	Address string
-	PCount  int
-	Rating  int
+	Address        string `json:"address"`
+	PCount         int    `json:"pcount"` // Total packet count
+	Rating         int    `json:"rating"`
+	AvgRSSI        int8   `json:"avg_rssi"`         // Average signal strength
+	LastRSSI       int8   `json:"last_rssi"`        // Most recent reading
+	LastSeen       int64  `json:"last_seen"`        // Unix timestamp
+	RetryCount     int    `json:"retry_count"`      // Frames with Retry flag set
+	DataFrameCount int    `json:"data_frame_count"` // Data frames (vs mgmt/ctrl)
+	MaxDataRate    uint8  `json:"max_data_rate"`    // Highest observed rate
+	SNR            int8   `json:"snr"`              // Signal-to-noise ratio
 }
 
 type networkInterface struct {
@@ -245,7 +252,7 @@ func cmdBypass(db *scribble.Driver) {
 func cmdScan() {
 	scanCmd := flag.NewFlagSet("scan", flag.ExitOnError)
 	scan5G := scanCmd.Bool("5g", false, "also scan 5GHz channels (slower)")
-	scanDwell := scanCmd.Int("dwell", 200, "time in milliseconds to dwell on each channel")
+	scanTime := scanCmd.Int("t", 200, "time in milliseconds to monitor each channel")
 	sortBy := scanCmd.String("s", "signal", "sort results by: signal or security")
 	targetInterface := scanCmd.String("i", "en0", "name of wifi interface")
 	verbose := scanCmd.Bool("v", false, "output more information")
@@ -266,9 +273,7 @@ func cmdScan() {
 		channels = append(channels, defaultChannels5G...)
 	}
 
-	dwellTime := time.Duration(*scanDwell) * time.Millisecond
-
-	aps, err := scanForAccessPoints(*targetInterface, channels, dwellTime, *verbose)
+	aps, err := scanForAccessPoints(*targetInterface, channels, time.Duration(*scanTime)*time.Millisecond, *verbose)
 	if err != nil {
 		fmt.Printf("Error scanning for access points: %v\n", err)
 		return
@@ -456,9 +461,9 @@ func resolveSSIDFromBSSID(bssid, iface string, verbose bool) (string, error) {
 	}
 
 	channels := append(defaultChannels2G, defaultChannels5G...)
-	dwellTime := 300 * time.Millisecond
+	scanTime := 300 * time.Millisecond
 
-	aps, err := scanForAccessPoints(iface, channels, dwellTime, verbose)
+	aps, err := scanForAccessPoints(iface, channels, scanTime, verbose)
 	if err != nil {
 		return "", fmt.Errorf("scan failed: %w", err)
 	}

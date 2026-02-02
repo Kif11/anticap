@@ -7,8 +7,8 @@ anticap -h
 -c    run packet capture and exit
 -ch int
     target radio channels (1-14). use sudo airport -s to determine active channel (default 11)
--dwell int
-    time in milliseconds to dwell on each channel during scan (default 200)
+-t int
+    time in milliseconds to monitor each channel during scan (default 200)
 -i string
     name of wifi interface, use ifconfig to find out (default "en0")
 -join string
@@ -34,7 +34,7 @@ That doesn't seem very elegant. I make sense to me to use sub-command to separat
 
 ```bash
 anticap bypass -n 300 -i <interface> -t <TARGET_MAC> // main uber mode that runs as default mode right now. This mode include full process of packet capture, mac spoof and internet connection testing 
-anticap scan -5g -dwell 300 -s "weak" // Scan available wifi networks
+anticap scan -5g -t 300 -s "weak" // Scan available wifi networks
 anticap capture -i <interface> -n 300 -t <TARGET_MAC>
 anticap join -p <PASS> <SSID> // Join specified wifi network
 anticap reset // reset to original mac address and exit

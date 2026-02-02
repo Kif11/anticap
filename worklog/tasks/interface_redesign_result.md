@@ -9,7 +9,7 @@ The command-line interface has been refactored from a single command with flags 
 | Command | Options | Description |
 |---------|---------|-------------|
 | `anticap bypass` | `-i`, `-t`, `-ch`, `-n`, `-v` | Full process: packet capture, mac spoof, connection testing |
-| `anticap scan` | `-5g`, `-dwell`, `-s`, `-i`, `-v` | Scan available WiFi networks |
+| `anticap scan` | `-5g`, `-t`, `-s`, `-i`, `-v` | Scan available WiFi networks |
 | `anticap capture` | `-i`, `-t`, `-ch`, `-n`, `-v` | Run packet capture only |
 | `anticap join` | `-p`, `-v` `<SSID>` | Join specified WiFi network |
 | `anticap reset` | `-i`, `-v` | Reset to original MAC address |

@@ -62,7 +62,13 @@ func extractRSSI(packet gopacket.Packet) int8 {
 	if !ok {
 		return -100
 	}
-	return radioTap.DBMAntennaSignal
+	rssi := radioTap.DBMAntennaSignal
+	// RSSI of 0 indicates the value wasn't set in the RadioTap header
+	// Valid RSSI values are negative (typically -30 to -100 dBm)
+	if rssi == 0 {
+		return -100
+	}
+	return rssi
 }
 
 // parseRSNCipherSuite parses cipher suite from RSN/WPA IE
@@ -416,9 +422,9 @@ func joinStrings(parts []string, sep string) string {
 // This method can get actual BSSIDs even on modern macOS where airport utility is deprecated
 // and Swift Core WiFi utils require geo location permission to see BSSIDs
 // channels: list of channels to scan (e.g., []int{1,6,11} for 2.4GHz)
-// dwellTime: time to spend on each channel (e.g., 500ms)
+// scanTime: time to spend on each channel (e.g., 500ms)
 // Returns a map of BSSID -> AccessPoint
-func scanForAccessPoints(iface string, channels []int, dwellTime time.Duration, verbose bool) (map[string]AccessPoint, error) {
+func scanForAccessPoints(iface string, channels []int, scanTime time.Duration, verbose bool) (map[string]AccessPoint, error) {
 	accessPoints := make(map[string]AccessPoint)
 
 	handle, err := pcap.OpenLive(iface, 65536, true, pcap.BlockForever)
@@ -451,8 +457,8 @@ func scanForAccessPoints(iface string, channels []int, dwellTime time.Duration, 
 			fmt.Printf("Scanning channel %d...\n", channel)
 		}
 
-		// Capture packets for dwellTime on this channel
-		deadline := time.Now().Add(dwellTime)
+		// Capture packets for scanTime on this channel
+		deadline := time.Now().Add(scanTime)
 		for time.Now().Before(deadline) {
 			// Read packet with timeout
 			data, ci, err := handle.ReadPacketData()
@@ -613,30 +619,202 @@ func printAccessPoints(aps map[string]AccessPoint, sortByWeakSecurity bool) {
 	fmt.Printf("\nTotal: %d access points\n", len(aps))
 }
 
-func handlePacket(p gopacket.Packet) *layers.Dot11 {
-	linkLayer := p.Layer(layers.LayerTypeDot11)
-	if linkLayer != nil {
-		// Get actual dot11 data from this layer
-		dot11, _ := linkLayer.(*layers.Dot11)
-		return dot11
-	}
-	return nil
+// packetInfo holds extracted information from a single packet
+type packetInfo struct {
+	srcAddr     string
+	dstAddr     string
+	rssi        int8
+	noise       int8
+	snr         int8
+	dataRate    uint8
+	isDataFrame bool
+	isRetry     bool
+	frameType   string
 }
 
-func monitor(db *scribble.Driver, iface string, targetDevice string, channel int, maxNumPackets int) ([]device, error) {
-	err := setChannel(iface, channel)
-	if err != nil {
-		return nil, err
+// handlePacket extracts Dot11 and RadioTap layers from a packet
+func handlePacket(p gopacket.Packet) (*layers.Dot11, *layers.RadioTap) {
+	var dot11 *layers.Dot11
+	var radioTap *layers.RadioTap
+
+	if rtLayer := p.Layer(layers.LayerTypeRadioTap); rtLayer != nil {
+		radioTap, _ = rtLayer.(*layers.RadioTap)
 	}
 
+	if d11Layer := p.Layer(layers.LayerTypeDot11); d11Layer != nil {
+		dot11, _ = d11Layer.(*layers.Dot11)
+	}
+
+	return dot11, radioTap
+}
+
+// extractPacketInfo extracts all relevant information from Dot11 and RadioTap layers
+func extractPacketInfo(dot11 *layers.Dot11, radioTap *layers.RadioTap) packetInfo {
+	info := packetInfo{
+		rssi:     -100,
+		noise:    -100,
+		dataRate: 0,
+	}
+
+	if dot11.Address1 != nil {
+		info.dstAddr = dot11.Address1.String()
+	}
+	if dot11.Address2 != nil {
+		info.srcAddr = dot11.Address2.String()
+	}
+
+	// Extract frame type information
+	info.isDataFrame = dot11.Type.MainType() == layers.Dot11TypeData
+	info.isRetry = dot11.Flags.Retry()
+
+	// switch dot11.Type {
+	// case layers.Dot11TypeMgmtAssociationResp:
+	// 	// Handle association response
+	// case layers.Dot11TypeMgmtBeacon:
+	// 	// Handle beacon
+	// case layers.Dot11TypeMgmtProbeReq:
+	// 	// Handle probe request
+	// }
+
+	// Determine frame type string
+	// see https://en.wikipedia.org/wiki/802.11_frame_types#Types_and_subtypes
+	switch dot11.Type.MainType() {
+	case layers.Dot11TypeData:
+		info.frameType = "Data"
+	case layers.Dot11TypeMgmt:
+		info.frameType = "Mgmt"
+	case layers.Dot11TypeCtrl:
+		info.frameType = "Ctrl"
+	default:
+		info.frameType = "Unkn"
+	}
+
+	// Extract RadioTap information
+	if radioTap != nil {
+		info.rssi = radioTap.DBMAntennaSignal
+		info.noise = radioTap.DBMAntennaNoise
+		info.dataRate = uint8(radioTap.Rate)
+	}
+	info.snr = info.rssi - info.noise
+
+	return info
+}
+
+// updateDevice updates or creates a device entry based on packet info
+func updateDevice(devices map[string]device, info packetInfo) device {
+	var dev device
+
+	if existing, ok := devices[info.dstAddr]; ok {
+		dev = existing
+		dev.PCount++
+		// Update RSSI with running average
+		dev.AvgRSSI = int8((int(dev.AvgRSSI)*(dev.PCount-1) + int(info.rssi)) / dev.PCount)
+		dev.LastRSSI = info.rssi
+		dev.LastSeen = time.Now().Unix()
+		if info.isRetry {
+			dev.RetryCount++
+		}
+		if info.isDataFrame {
+			dev.DataFrameCount++
+		}
+		if info.dataRate > dev.MaxDataRate {
+			dev.MaxDataRate = info.dataRate
+		}
+		dev.SNR = info.snr
+	} else {
+		retryCount := 0
+		if info.isRetry {
+			retryCount = 1
+		}
+		dataFrameCount := 0
+		if info.isDataFrame {
+			dataFrameCount = 1
+		}
+		dev = device{
+			Address:        info.dstAddr,
+			PCount:         1,
+			Rating:         0,
+			AvgRSSI:        info.rssi,
+			LastRSSI:       info.rssi,
+			LastSeen:       time.Now().Unix(),
+			RetryCount:     retryCount,
+			DataFrameCount: dataFrameCount,
+			MaxDataRate:    info.dataRate,
+			SNR:            info.snr,
+		}
+	}
+
+	return dev
+}
+
+// printPacketInfo prints real-time packet information as it arrives
+func printPacketInfo(info packetInfo, dev device) {
+	retryFlag := " "
+	if info.isRetry {
+		retryFlag = "R"
+	}
+	dataRateMbps := float64(info.dataRate) * 0.5
+	fmt.Printf("[%s%s] %s -> %s | RSSI: %d dBm | SNR: %d | Rate: %.1f Mbps | Pkts: %d\n",
+		info.frameType, retryFlag, info.srcAddr, info.dstAddr,
+		info.rssi, info.snr, dataRateMbps, dev.PCount)
+}
+
+// printDeviceSummary prints a summary table of all discovered devices
+func printDeviceSummary(devices map[string]device) {
+	sortedDevices := sortDevices(devices)
+
+	fmt.Printf("\n%s\n", strings.Repeat("-", 80))
+	fmt.Printf("Total %d devices discovered\n\n", len(devices))
+
+	const padding = 2
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, padding, ' ', tabwriter.AlignRight)
+
+	fmt.Fprintln(w, "Address\tPackets\tRSSI\tSNR\tDataRate\tRetry%\tData%\t")
+	fmt.Fprintln(w, "\t\t\t\t\t\t\t")
+	for _, d := range sortedDevices {
+		retryPct := float64(0)
+		if d.PCount > 0 {
+			retryPct = float64(d.RetryCount) / float64(d.PCount) * 100
+		}
+		dataPct := float64(0)
+		if d.PCount > 0 {
+			dataPct = float64(d.DataFrameCount) / float64(d.PCount) * 100
+		}
+		// RadioTap Rate is in units of 500 Kbps, so multiply by 0.5 to get Mbps
+		dataRateMbps := float64(d.MaxDataRate) * 0.5
+		fmt.Fprintf(w, "%s\t%d\t%d dBm\t%d\t%.1f Mbps\t%.1f%%\t%.1f%%\t\n",
+			d.Address, d.PCount, d.AvgRSSI, d.SNR, dataRateMbps, retryPct, dataPct)
+	}
+	fmt.Fprintln(w, "\t\t\t\t\t\t\t")
+	w.Flush()
+}
+
+// openMonitorHandle opens a pcap handle configured for monitor mode
+func openMonitorHandle(iface string, targetDevice string, currentMac string) (*pcap.Handle, error) {
 	handle, err := pcap.OpenLive(iface, 65536, true, pcap.BlockForever)
 	if err != nil {
 		return nil, err
 	}
-	defer handle.Close()
 
 	// Set to capture IEEE802.11 radio packets (Monitor Mode)
 	if err := handle.SetLinkType(layers.LinkTypeIEEE80211Radio); err != nil {
+		handle.Close()
+		return nil, err
+	}
+
+	bpfFilter := fmt.Sprintf("ether src %s and not ether host ff:ff:ff:ff:ff:ff and not ether host %s", targetDevice, currentMac)
+	fmt.Println("BPF Filter:", bpfFilter)
+
+	if err := handle.SetBPFFilter(bpfFilter); err != nil {
+		handle.Close()
+		return nil, err
+	}
+
+	return handle, nil
+}
+
+func monitor(db *scribble.Driver, iface string, targetDevice string, channel int, maxNumPackets int) ([]device, error) {
+	if err := setChannel(iface, channel); err != nil {
 		return nil, err
 	}
 
@@ -645,75 +823,44 @@ func monitor(db *scribble.Driver, iface string, targetDevice string, channel int
 		return nil, err
 	}
 
-	bpfFilter := fmt.Sprintf("ether src %s and not ether host ff:ff:ff:ff:ff:ff and not ether host %s", targetDevice, currentMac)
-	// bpfFilter := ""
-
-	fmt.Println("BPF Filter: ", bpfFilter)
-
-	if err := handle.SetBPFFilter(bpfFilter); err != nil {
+	handle, err := openMonitorHandle(iface, targetDevice, currentMac)
+	if err != nil {
 		return nil, err
 	}
+	defer handle.Close()
 
 	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
-
 	devices := make(map[string]device)
 	packetCount := 0
 
 	for packet := range packetSource.Packets() {
 		if packetCount > maxNumPackets {
-			handle.Close()
 			break
 		}
 
-		chunk := handlePacket(packet)
+		dot11, radioTap := handlePacket(packet)
 		packetCount++
 
-		if chunk == nil {
+		if dot11 == nil || dot11.Address1 == nil {
 			continue
 		}
 
-		dstAddr := chunk.Address1
-		srcAddr := chunk.Address2
-
-		if dstAddr == nil {
+		info := extractPacketInfo(dot11, radioTap)
+		if info.dstAddr == "" {
 			continue
 		}
 
-		var newDevice device
+		dev := updateDevice(devices, info)
+		devices[info.dstAddr] = dev
 
-		if val, ok := devices[dstAddr.String()]; ok {
-			val.PCount++
-			newDevice = val
-		} else {
-			newDevice = device{
-				Address: dstAddr.String(),
-				PCount:  1,
-				Rating:  0,
-			}
+		printPacketInfo(info, dev)
+
+		if info.srcAddr != "" {
+			db.Write(info.srcAddr, info.dstAddr, dev)
 		}
-
-		fmt.Printf("%s %d\n", dstAddr, newDevice.PCount)
-
-		devices[dstAddr.String()] = newDevice
-
-		db.Write(srcAddr.String(), dstAddr.String(), newDevice)
 	}
 
-	sortedDevices := sortDevices(devices)
+	printDeviceSummary(devices)
 
-	// Print report
-	fmt.Printf("\nTotal %d devices discovered\n\n", len(devices))
-
-	const padding = 4
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, padding, ' ', tabwriter.AlignRight)
-
-	fmt.Fprintln(w, "Address\tPackets\t")
-	fmt.Fprintln(w, "\t")
-	for _, d := range sortedDevices {
-		fmt.Fprintf(w, "%s\t%d\t\n", d.Address, d.PCount)
-	}
-	fmt.Fprintln(w, "\t")
-	w.Flush()
-
-	return sortedDevices, nil
+	return sortDevices(devices), nil
 }
