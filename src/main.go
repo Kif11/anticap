@@ -8,6 +8,8 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	scribble "github.com/nanobox-io/golang-scribble"
@@ -51,13 +53,15 @@ Usage:
   anticap <command> [options]
 
 Commands:
-  bypass    Run full bypass routine: packet capture, mac spoof, and internet connection testing
-  scan      Scan for available WiFi networks
-  capture   Run packet capture only (monitor mode)
-  join      Connect to a WiFi network by name
-  reset     Reset to original MAC address
-  setmac    Set interface MAC address
-  list      List stored captures for target MAC
+  bypass     Run full bypass routine: packet capture, mac spoof, and internet connection testing
+  scan       Scan for available WiFi networks
+  capture    Run packet capture only (monitor mode)
+  handshake  Capture WPA/WPA2 4-way handshake for use with aircrack-ng
+  join       Connect to a WiFi network by name
+  reset      Reset to original MAC address
+  setmac     Set interface MAC address
+  setchannel Set interface radio channel
+  list       List stored captures for target MAC
 
 Use "anticap <command> -h" for more information about a command.`)
 }
@@ -91,6 +95,11 @@ func main() {
 			requireRoot()
 		}
 		cmdCapture(db)
+	case "handshake":
+		if needsRoot(os.Args[2:]) {
+			requireRoot()
+		}
+		cmdHandshake()
 	case "join":
 		if needsRoot(os.Args[2:]) {
 			requireRoot()
@@ -106,6 +115,11 @@ func main() {
 			requireRoot()
 		}
 		cmdSetMac()
+	case "setchannel":
+		if needsRoot(os.Args[2:]) {
+			requireRoot()
+		}
+		cmdSetChannel()
 	case "list":
 		cmdList(db)
 	case "-h", "--help", "help":
@@ -248,10 +262,26 @@ func cmdBypass(db *scribble.Driver) {
 	}()
 }
 
+func parseChanFromArg(chStr string) []int {
+	parts := strings.Split(chStr, ",")
+	chans := []int{}
+	for _, c := range parts {
+		ch, err := strconv.ParseInt(c, 10, 32)
+		if err != nil {
+			fmt.Printf("can not parse chanel to int %s\n", c)
+			continue
+		}
+		chans = append(chans, int(ch))
+	}
+	return chans
+}
+
 // cmdScan scans for available WiFi networks
 func cmdScan() {
 	scanCmd := flag.NewFlagSet("scan", flag.ExitOnError)
-	scan5G := scanCmd.Bool("5g", false, "also scan 5GHz channels (slower)")
+	scanBands := scanCmd.String("b", "2g", "comma separated list of bands to scan (e.g. 2g,5g)")
+	scanChan := scanCmd.String("ch", "", "scan specified channels. This will override band selector (-b) (e.g. 6,11)")
+	// By default AP transmit every 100ms
 	scanTime := scanCmd.Int("t", 200, "time in milliseconds to monitor each channel")
 	sortBy := scanCmd.String("s", "signal", "sort results by: signal or security")
 	targetInterface := scanCmd.String("i", "en0", "name of wifi interface")
@@ -268,9 +298,20 @@ func cmdScan() {
 		fmt.Printf("Warning: failed to dissociate from WiFi: %v\n", err)
 	}
 
-	channels := defaultChannels2G
-	if *scan5G {
-		channels = append(channels, defaultChannels5G...)
+	bands := strings.Split(*scanBands, ",")
+
+	channels := []int{}
+	for _, b := range bands {
+		if b == "2g" {
+			channels = append(channels, defaultChannels2G...)
+		}
+		if b == "5g" {
+			channels = append(channels, defaultChannels5G...)
+		}
+	}
+
+	if *scanChan != "" {
+		channels = parseChanFromArg(*scanChan)
 	}
 
 	aps, err := scanForAccessPoints(*targetInterface, channels, time.Duration(*scanTime)*time.Millisecond, *verbose)
@@ -334,7 +375,63 @@ func cmdCapture(db *scribble.Driver) {
 	}
 }
 
-// cmdJoin connects to a WiFi network
+// cmdHandshake captures WPA/WPA2 4-way handshake packets
+func cmdHandshake() {
+	handshakeCmd := flag.NewFlagSet("handshake", flag.ExitOnError)
+	targetInterface := handshakeCmd.String("i", "en0", "name of wifi interface")
+	targetDevice := handshakeCmd.String("t", "", "MAC address of target wifi network (BSSID)")
+	targetChannel := handshakeCmd.Int("ch", 0, "target radio channel (1-14)")
+	timeout := handshakeCmd.Int("timeout", 120, "capture timeout in seconds")
+	outputFile := handshakeCmd.String("o", "", "output file for captured handshake (PCAP format)")
+	verbose := handshakeCmd.Bool("v", false, "output more information")
+
+	handshakeCmd.Parse(os.Args[2:])
+
+	if *targetDevice == "" {
+		fmt.Println("Error: target BSSID must be specified with -t <MAC>")
+		os.Exit(1)
+	}
+
+	if *targetChannel == 0 {
+		if net, err := getCachedNetwork(*targetDevice); err == nil {
+			*targetChannel = net.Channel
+			if *verbose {
+				fmt.Printf("Using cached channel %d for %s\n", *targetChannel, *targetDevice)
+			}
+		} else {
+			fmt.Println("Warning: Cannot load target network channel from cache. Using default 11.")
+			*targetChannel = 11
+		}
+	}
+
+	if *outputFile == "" {
+		*outputFile = fmt.Sprintf("handshakes/%s_%s.pcap", *targetDevice, time.Now().Format("20060102-150405"))
+	}
+
+	if *verbose {
+		fmt.Printf("Saving handshake to %s\n", *outputFile)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(*outputFile), 0755); err != nil {
+		log.Fatal(err)
+	}
+
+	// On newer mac it is required to dissociate from active WiFi network before using monitor mode
+	if err := dissociateWiFi(); err != nil {
+		log.Fatal(err)
+	}
+
+	err := captureHandshake(*targetInterface, *targetDevice, *targetChannel, time.Duration(*timeout)*time.Second, *outputFile, *verbose)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Printf("\nHandshake capture complete. File: %s\n", *outputFile)
+	fmt.Printf("You can now use this file with aircrack-ng, for example:\n")
+	fmt.Printf("  aircrack-ng -w <wordlist> %s\n", *outputFile)
+}
+
+// cmdJoin connects to a WiFi network by name
 func cmdJoin() {
 	joinCmd := flag.NewFlagSet("join", flag.ExitOnError)
 	password := joinCmd.String("p", "", "password for WiFi network")
@@ -403,6 +500,34 @@ func cmdSetMac() {
 	}
 
 	setMac(*targetInterface, macAddress)
+}
+
+func cmdSetChannel() {
+	setChannelCmd := flag.NewFlagSet("setchannel", flag.ExitOnError)
+	iface := setChannelCmd.String("i", "en0", "name of wifi interface")
+	verbose := setChannelCmd.Bool("v", false, "output more information")
+
+	setChannelCmd.Parse(os.Args[2:])
+
+	args := setChannelCmd.Args()
+	if len(args) < 1 {
+		fmt.Println("Usage: anticap setchannel -i <interface> <CHANNEL>")
+		os.Exit(1)
+	}
+
+	channel, err := strconv.ParseInt(args[0], 10, 32)
+	if err != nil {
+		fmt.Println("can not parse channel:", err)
+		os.Exit(1)
+	}
+	if *verbose {
+		fmt.Printf("Setting channel of %s to %d\n", *iface, channel)
+	}
+
+	if err := setChannel(*iface, int(channel)); err != nil {
+		fmt.Println("Error setting channel:", err)
+		os.Exit(1)
+	}
 }
 
 // cmdList lists stored captures for target MAC

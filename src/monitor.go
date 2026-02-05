@@ -427,7 +427,7 @@ func joinStrings(parts []string, sep string) string {
 func scanForAccessPoints(iface string, channels []int, scanTime time.Duration, verbose bool) (map[string]AccessPoint, error) {
 	accessPoints := make(map[string]AccessPoint)
 
-	handle, err := pcap.OpenLive(iface, 65536, true, pcap.BlockForever)
+	handle, err := pcap.OpenLive(iface, 65536, true, scanTime)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open interface %s: %w", iface, err)
 	}
@@ -459,10 +459,17 @@ func scanForAccessPoints(iface string, channels []int, scanTime time.Duration, v
 
 		// Capture packets for scanTime on this channel
 		deadline := time.Now().Add(scanTime)
+
 		for time.Now().Before(deadline) {
 			// Read packet with timeout
 			data, ci, err := handle.ReadPacketData()
 			if err != nil {
+				if err == pcap.NextErrorTimeoutExpired {
+					continue
+				}
+				if verbose {
+					fmt.Printf("Warning: error reading packet on channel %d: %v\n", channel, err)
+				}
 				continue
 			}
 

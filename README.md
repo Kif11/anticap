@@ -69,6 +69,28 @@ Run packet capture only (no MAC spoofing)
 sudo ./build/anticap capture -t <BSSID> [-ch <channel>] [-i <interface>] [-n <num_packets>] [-v]
 ```
 
+#### handshake
+Capture WPA/WPA2 4-way handshake for password cracking with aircrack-ng
+```
+sudo ./build/anticap handshake -t <BSSID> [-ch <channel>] [-i <interface>] [-timeout <seconds>] [-o <output_file>] [-v]
+```
+- `-t`: Target BSSID (required)
+- `-ch`: Target channel (auto-detected from cache if available)
+- `-i`: Interface name (default: en0)
+- `-timeout`: Capture timeout in seconds (default: 120)
+- `-o`: Output PCAP file path (default: handshakes/<BSSID>_<timestamp>.pcap)
+- `-v`: Verbose output
+
+**Note**: To capture a handshake, a client device must connect (or reconnect) to the target network while anticap is monitoring. You can trigger this by:
+1. Deauthenticating a connected client (using tools like aireplay-ng)
+2. Waiting for a new device to connect naturally
+3. Having someone disconnect and reconnect to the network
+
+Once captured, use the PCAP file with aircrack-ng:
+```
+aircrack-ng -w wordlist.txt handshakes/xx:xx:xx:xx:xx:xx_*.pcap
+```
+
 #### join
 Join a specified WiFi network
 ```
