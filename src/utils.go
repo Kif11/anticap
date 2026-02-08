@@ -117,6 +117,16 @@ func runSwift(code string, args ...string) ([]byte, error) {
 	return cmd.Output()
 }
 
+// SetChannel changes the channel of the network interface.
+func setChannel(iface string, channel int) error {
+	_, err := runSwift(setChannelSwift, iface, fmt.Sprintf("%d", channel))
+	if err != nil {
+		return fmt.Errorf("failed to set channel: %w", err)
+	}
+
+	return nil
+}
+
 func getMac(interfc string) (string, error) {
 	netInterface, err := net.InterfaceByName(interfc)
 	if err != nil {
