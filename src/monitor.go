@@ -3,7 +3,9 @@ package main
 import (
 	"fmt"
 	"os"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -18,7 +20,7 @@ import (
 type AccessPoint struct {
 	BSSID    string `json:"bssid"`
 	SSID     string `json:"ssid"`
-	Channel  int    `json:"channel"`
+	Channels []int  `json:"channel"`
 	RSSI     int8   `json:"rssi"`
 	Security string `json:"security"`
 	SeenAt   int64  `json:"seen_at"`
@@ -427,7 +429,7 @@ func joinStrings(parts []string, sep string) string {
 func scanForAccessPoints(iface string, channels []int, scanTime time.Duration, verbose bool) (map[string]AccessPoint, error) {
 	accessPoints := make(map[string]AccessPoint)
 
-	handle, err := pcap.OpenLive(iface, 65536, true, scanTime)
+	handle, err := pcap.OpenLive(iface, 65536, true, pcap.BlockForever)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open interface %s: %w", iface, err)
 	}
@@ -447,9 +449,7 @@ func scanForAccessPoints(iface string, channels []int, scanTime time.Duration, v
 
 	for _, channel := range channels {
 		if err := setChannel(iface, channel); err != nil {
-			if verbose {
-				fmt.Printf("Warning: failed to set channel %d: %v\n", channel, err)
-			}
+			fmt.Printf("Warning: failed to set channel %d: %v\n", channel, err)
 			continue
 		}
 
@@ -461,15 +461,9 @@ func scanForAccessPoints(iface string, channels []int, scanTime time.Duration, v
 		deadline := time.Now().Add(scanTime)
 
 		for time.Now().Before(deadline) {
-			// Read packet with timeout
 			data, ci, err := handle.ReadPacketData()
 			if err != nil {
-				if err == pcap.NextErrorTimeoutExpired {
-					continue
-				}
-				if verbose {
-					fmt.Printf("Warning: error reading packet on channel %d: %v\n", channel, err)
-				}
+				fmt.Printf("Warning: error reading packet on channel %d: %v\n", channel, err)
 				continue
 			}
 
@@ -485,14 +479,11 @@ func scanForAccessPoints(iface string, channels []int, scanTime time.Duration, v
 				continue
 			}
 
-			// For beacon/probe response, Address2 is the BSSID (transmitter)
-			// Address3 is also BSSID in these frames
-			bssid := dot11.Address2.String()
-			if bssid == "" || bssid == "00:00:00:00:00:00" {
-				bssid = dot11.Address3.String()
-			}
+			// Address3 is BSSID in beacon/probe frames
+			bssid := dot11.Address3.String()
 
-			if bssid == "" || bssid == "00:00:00:00:00:00" {
+			if bssid == "" {
+				fmt.Printf("can not determine BSSID of beacon/probe frame")
 				continue
 			}
 
@@ -500,21 +491,35 @@ func scanForAccessPoints(iface string, channels []int, scanTime time.Duration, v
 			rssi := extractRSSI(packet)
 			security := extractSecurityFromBeacon(packet)
 
-			ap := AccessPoint{
-				BSSID:    bssid,
-				SSID:     ssid,
-				Channel:  channel,
-				RSSI:     rssi,
-				Security: security,
-				SeenAt:   ci.Timestamp.Unix(),
-			}
+			if existing, ok := accessPoints[bssid]; ok {
+				// Use last captured signal strength
+				existing.RSSI = rssi
 
-			// Keep the one with strongest signal if we've seen this AP before
-			if existing, exists := accessPoints[bssid]; exists {
-				if rssi > existing.RSSI {
-					accessPoints[bssid] = ap
+				if !slices.Contains(existing.Channels, channel) {
+					existing.Channels = append(existing.Channels, channel)
 				}
+
+				existing.SeenAt = ci.Timestamp.Unix()
+
+				if existing.SSID == "An Cafe" {
+					fmt.Printf("updating existing: %s, %d\n", existing.SSID, channel)
+				}
+
+				accessPoints[bssid] = existing
 			} else {
+				ap := AccessPoint{
+					BSSID:    bssid,
+					SSID:     ssid,
+					Channels: []int{channel},
+					RSSI:     rssi,
+					Security: security,
+					SeenAt:   ci.Timestamp.Unix(),
+				}
+
+				if ssid == "An Cafe" {
+					fmt.Printf("found new: %s, %d\n", bssid, channel)
+				}
+
 				accessPoints[bssid] = ap
 			}
 		}
@@ -593,6 +598,14 @@ func sortAccessPoints(aps map[string]AccessPoint, sortType string) []AccessPoint
 	return apList
 }
 
+func joinInts(ints []int) string {
+	str := ""
+	for _, i := range ints {
+		str += " " + strconv.Itoa(i)
+	}
+	return str
+}
+
 // printAccessPoints displays discovered access points in a formatted table
 // sortByWeakSecurity: if true, sort by security (weakest first); if false, sort by RSSI (strongest first)
 func printAccessPoints(aps map[string]AccessPoint, sort string) {
@@ -618,7 +631,7 @@ func printAccessPoints(aps map[string]AccessPoint, sort string) {
 		if security == "" {
 			security = "Unknown"
 		}
-		fmt.Fprintf(w, "%s\t%s\t%d\t%d dBm\t%s\t\n", ap.BSSID, ssid, ap.Channel, ap.RSSI, security)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%d dBm\t%s\t\n", ap.BSSID, ssid, joinInts(ap.Channels), ap.RSSI, security)
 	}
 	fmt.Fprintln(w, "\t\t\t\t\t")
 	w.Flush()

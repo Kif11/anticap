@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/google/gopacket"
@@ -81,76 +80,48 @@ func getClientMAC(dot11 *layers.Dot11) string {
 }
 
 // Processes a packet and checks if it's part of a 4-way handshake
-func parseHandshakeFrame(packet gopacket.Packet, bssid string, verbose bool) (HandshakeFrame, error) {
-	// Normalize BSSID to lowercase for comparison
-	bssid = strings.ToLower(bssid)
-
+func parseHandshakeFrame(packet gopacket.Packet) (bool, HandshakeFrame) {
 	// Get Dot11 layer
 	dot11Layer := packet.Layer(layers.LayerTypeDot11)
 	if dot11Layer == nil {
-		return HandshakeFrame{}, fmt.Errorf("can not get Dot11 layer")
+		return false, HandshakeFrame{}
 	}
 	dot11, ok := dot11Layer.(*layers.Dot11)
 	if !ok {
-		return HandshakeFrame{}, fmt.Errorf("can not cast layer to Dot11")
+		return false, HandshakeFrame{}
 	}
 
-	// Get EAPOL layer
-	eapolLayer := packet.Layer(layers.LayerTypeEAPOL)
-	if eapolLayer == nil {
-		return HandshakeFrame{}, fmt.Errorf("can not get EAPOL layer")
+	// Get EAPOLKey layer
+	keyLayer := packet.Layer(layers.LayerTypeEAPOLKey)
+	if keyLayer == nil {
+		return false, HandshakeFrame{}
+	}
+	EAPOLKey, ok := keyLayer.(*layers.EAPOLKey)
+	if !ok {
+		return false, HandshakeFrame{}
 	}
 
-	// if verbose {
-	// 	fmt.Printf("[DEBUG] Found EAPOL packet! Addr1=%s Addr2=%s Addr3=%s, FromDS: %t, ToDS: %t\n",
-	// 		dot11.Address1.String(), dot11.Address2.String(), dot11.Address3.String(), dot11.Flags.FromDS(), dot11.Flags.ToDS())
-	// }
-	eapol, ok := eapolLayer.(*layers.EAPOL)
-	if !ok || eapol.Type != layers.EAPOLTypeKey {
-		return HandshakeFrame{}, fmt.Errorf("can not cast layer to layers.EAPOL or not a Key frame")
-	}
-
-	var key *layers.EAPOLKey
-	if eapol.Type == layers.EAPOLTypeKey {
-		if keyLayer := packet.Layer(layers.LayerTypeEAPOLKey); keyLayer != nil {
-			key = keyLayer.(*layers.EAPOLKey)
-
-			// fmt.Printf("  → EAPOL-Key frame\n")
-			// fmt.Printf("    Descriptor:   %v\n", key.KeyDescriptorType)
-			// fmt.Printf("    Key Type:     %v\n", key.KeyType) // Pairwise / Group
-			// fmt.Printf("    Key ACK:      %v\n", key.KeyACK)
-			// fmt.Printf("    Key MIC:      %v\n", key.KeyMIC)
-			// fmt.Printf("    Secure:       %v\n", key.Secure)
-			// fmt.Printf("    Request:      %v\n", key.Request)
-			// fmt.Printf("    Encrypted Key Data: %v\n", key.EncryptedKeyData)
-		} else {
-			return HandshakeFrame{}, fmt.Errorf("can not parse EAPOL Key layer")
-		}
-	}
-
-	// Identify which message this is
-	msgNum := identifyHandshakeMessage(key)
+	msgNum := identifyHandshakeMessage(EAPOLKey)
 	if msgNum == 0 {
-		return HandshakeFrame{}, fmt.Errorf("not a recognized handshake message")
+		fmt.Println("Warning! can not identify hand shake message type.")
+		return false, HandshakeFrame{}
 	}
 
-	// Store the message
 	msg := HandshakeFrame{
-		Num:       msgNum, //TODO
-		BSSID:     dot11.Address3.String(),
+		Num:       msgNum,
+		BSSID:     dot11.Address3.String(), // Address3 should be always BSSID
 		ClientMAC: getClientMAC(dot11),
 		Timestamp: time.Now(),
 	}
 
-	return msg, nil
+	return true, msg
 }
 
 // CaptureHandshake captures 4-way handshake packets for a specific BSSID
-func captureHandshake(iface string, bssid string, channel int, timeout time.Duration, outputFile string, verbose bool) error {
+func captureHandshake(iface string, bssid string, channel int, outputFile string, verbose bool) error {
 	if verbose {
 		fmt.Printf("Starting handshake capture for BSSID: %s on channel %d\n", bssid, channel)
 		fmt.Printf("Output file: %s\n", outputFile)
-		fmt.Printf("Timeout: %v\n", timeout)
 	}
 
 	// Set channel
@@ -194,7 +165,7 @@ func captureHandshake(iface string, bssid string, channel int, timeout time.Dura
 	}
 
 	// Open pcap handle with a short timeout so we can check the deadline
-	handle, err := pcap.OpenLive(iface, 65536, true, 100*time.Millisecond)
+	handle, err := pcap.OpenLive(iface, 65536, true, 1*time.Second)
 	if err != nil {
 		return fmt.Errorf("failed to open interface: %w", err)
 	}
@@ -211,31 +182,29 @@ func captureHandshake(iface string, bssid string, channel int, timeout time.Dura
 		return fmt.Errorf("failed to set BPF filter: %w", err)
 	}
 	if verbose {
-		fmt.Printf("Applied BPF filter: %s\n", bpfFilter)
+		fmt.Printf("Using BPF filter: %s\n", bpfFilter)
 	}
 
-	fmt.Printf("\n[*] Waiting for 4-way handshake...\n")
-	fmt.Printf("[*] Try to connect a device to the network to trigger the handshake\n\n")
+	fmt.Printf("Waiting for 4-way handshake...\n")
+	fmt.Printf("Wait for a device to connect to the network to trigger the handshake\n\n")
 
 	// Use ReadPacketData directly for more reliable packet capture
-	deadline := time.Now().Add(timeout)
 	packetCount := 0
-	for time.Now().Before(deadline) {
+	for {
 		data, ci, err := handle.ReadPacketData()
 		if err != nil {
-			if err == pcap.NextErrorTimeoutExpired {
-				continue
-			}
-			if verbose {
-				fmt.Printf("Warning: error reading packet: %v\n", err)
-			}
+			fmt.Printf("Warning: error reading packet: %v\n", err)
 			continue
 		}
 
 		packetCount++
-		// if verbose && packetCount%100 == 0 {
-		// 	fmt.Printf("[*] Received %d packets so far...\n", packetCount)
-		// }
+
+		if verbose {
+			if packetCount%100 == 0 {
+				fmt.Printf("Captured %d packets\n", packetCount)
+			}
+		}
+
 		// Write packet to pcap file
 		if pcapWriter != nil {
 			if err := pcapWriter.WritePacket(ci, data); err != nil {
@@ -247,13 +216,11 @@ func captureHandshake(iface string, bssid string, channel int, timeout time.Dura
 
 		packet := gopacket.NewPacket(data, layers.LayerTypeRadioTap, gopacket.Default)
 
-		msg, err := parseHandshakeFrame(packet, bssid, verbose)
-		if err != nil {
+		ok, msg := parseHandshakeFrame(packet)
+		if !ok {
 			continue
 		}
 
 		fmt.Printf("[+] %d, BSSID: %s, CLIENT: %s\n", msg.Num, msg.BSSID, msg.ClientMAC)
 	}
-
-	return nil
 }
