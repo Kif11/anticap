@@ -165,7 +165,7 @@ func captureHandshake(iface string, bssid string, channel int, outputFile string
 	}
 
 	// Open pcap handle with a short timeout so we can check the deadline
-	handle, err := pcap.OpenLive(iface, 65536, true, 1*time.Second)
+	handle, err := pcap.OpenLive(iface, 65536, true, pcap.BlockForever)
 	if err != nil {
 		return fmt.Errorf("failed to open interface: %w", err)
 	}
@@ -177,7 +177,10 @@ func captureHandshake(iface string, bssid string, channel int, outputFile string
 	}
 
 	// Set BPF filter to capture only EAPOL and beacon frames
-	bpfFilter := fmt.Sprintf("wlan host %s and (wlan proto 0x888e or wlan type mgt subtype beacon)", bssid)
+	bpfFilter := "wlan proto 0x888e or wlan type mgt subtype beacon"
+	if bssid != "" {
+		bpfFilter = fmt.Sprintf("wlan host %s and (%s)", bssid, bpfFilter)
+	}
 	if err := handle.SetBPFFilter(bpfFilter); err != nil {
 		return fmt.Errorf("failed to set BPF filter: %w", err)
 	}
@@ -190,6 +193,7 @@ func captureHandshake(iface string, bssid string, channel int, outputFile string
 
 	// Use ReadPacketData directly for more reliable packet capture
 	packetCount := 0
+	handshakes := make(map[string][]int)
 	for {
 		data, ci, err := handle.ReadPacketData()
 		if err != nil {
@@ -221,6 +225,14 @@ func captureHandshake(iface string, bssid string, channel int, outputFile string
 			continue
 		}
 
-		fmt.Printf("[+] %d, BSSID: %s, CLIENT: %s\n", msg.Num, msg.BSSID, msg.ClientMAC)
+		handshakes[msg.BSSID] = []int{0, 0, 0, 0}
+
+		handshakes[msg.BSSID][msg.Num-1] = msg.Num
+		// fmt.Printf("[+] %d, BSSID: %s, CLIENT: %s\n", msg.Num, msg.BSSID, msg.ClientMAC)
+
+		fmt.Println()
+		for bssid, msgs := range handshakes {
+			fmt.Printf("%s : %s\n", bssid, joinInts(msgs))
+		}
 	}
 }

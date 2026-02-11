@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"strings"
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
@@ -142,7 +143,7 @@ func (a Dot11CipherType) String() string {
 	}
 }
 
-func Dot11ParseEncryption(packet gopacket.Packet, dot11 *layers.Dot11) (bool, string, string, string) {
+func dot11ParseEncryption(packet gopacket.Packet, dot11 *layers.Dot11) (bool, string, string, string) {
 	var i uint16
 	enc := ""
 	cipher := ""
@@ -161,7 +162,7 @@ func Dot11ParseEncryption(packet gopacket.Packet, dot11 *layers.Dot11) (bool, st
 				found = true
 				if info.ID == layers.Dot11InformationElementIDRSNInfo {
 					enc = "WPA2"
-					rsn, err := Dot11InformationElementRSNInfoDecode(info.Info)
+					rsn, err := dot11InformationElementRSNInfoDecode(info.Info)
 					if err == nil {
 						for i = 0; i < rsn.Pairwise.Count; i++ {
 							cipher = rsn.Pairwise.Suites[i].Type.String()
@@ -178,7 +179,7 @@ func Dot11ParseEncryption(packet gopacket.Packet, dot11 *layers.Dot11) (bool, st
 					}
 				} else if enc == "" && info.ID == layers.Dot11InformationElementIDVendor && info.Length >= 8 && bytes.Equal(info.OUI, wpaSignatureBytes) && bytes.HasPrefix(info.Info, []byte{1, 0}) {
 					enc = "WPA"
-					vendor, err := Dot11InformationElementVendorInfoDecode(info.Info)
+					vendor, err := dot11InformationElementVendorInfoDecode(info.Info)
 					if err == nil {
 						for i = 0; i < vendor.Unicast.Count; i++ {
 							cipher = vendor.Unicast.Suites[i].Type.String()
@@ -199,7 +200,7 @@ func Dot11ParseEncryption(packet gopacket.Packet, dot11 *layers.Dot11) (bool, st
 	return found, enc, cipher, auth
 }
 
-func Dot11InformationElementVendorInfoDecode(buf []byte) (v VendorInfo, err error) {
+func dot11InformationElementVendorInfoDecode(buf []byte) (v VendorInfo, err error) {
 	if err = canParse("Vendor", buf, 8); err == nil {
 		v.WPAVersion = binary.LittleEndian.Uint16(buf[0:2])
 		v.Multicast.OUI = buf[2:5]
@@ -275,7 +276,7 @@ func parseAuthkeySuite(buf []byte) (suite AuthSuite, err error) {
 	return
 }
 
-func Dot11InformationElementRSNInfoDecode(buf []byte) (rsn RSNInfo, err error) {
+func dot11InformationElementRSNInfoDecode(buf []byte) (rsn RSNInfo, err error) {
 	if err = canParse("RSN", buf, 8); err == nil {
 		rsn.Version = binary.LittleEndian.Uint16(buf[0:2])
 		rsn.Group.OUI = buf[2:5]
@@ -325,4 +326,46 @@ func Dot11InformationElementRSNInfoDecode(buf []byte) (rsn RSNInfo, err error) {
 	}
 
 	return
+}
+
+// Returns a numeric value for security strength (lower = weaker)
+func getSecurityStrength(security string) int {
+	sec := strings.ToLower(security)
+
+	// Open/Unknown - weakest
+	if sec == "open" || sec == "unknown" || sec == "" {
+		return 0
+	}
+
+	// WEP - very weak
+	if strings.Contains(sec, "wep") {
+		return 1
+	}
+
+	// WPA (legacy) - weak
+	if strings.HasPrefix(sec, "wpa ") || sec == "wpa" {
+		if strings.Contains(sec, "enterprise") {
+			return 3
+		}
+		return 2
+	}
+
+	// WPA2 - moderate to strong
+	if strings.Contains(sec, "wpa2") {
+		if strings.Contains(sec, "enterprise") {
+			return 5
+		}
+		return 4
+	}
+
+	// WPA3 - strongest
+	if strings.Contains(sec, "wpa3") {
+		if strings.Contains(sec, "enterprise") {
+			return 7
+		}
+		return 6
+	}
+
+	// Default to middle strength if unknown format
+	return 3
 }

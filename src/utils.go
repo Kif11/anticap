@@ -150,6 +150,8 @@ func repairMac(mac string) string {
 	return strings.Join(newParts, ":")
 }
 
+// Returns a list of cached wifi networks as listed by `system_profiler SPAirPortDataType`
+// Note that networks in this list have no BSIDs
 func listWifiNetworks() ([]NetworkInfo, error) {
 	spResponse, err := systemProfileAirportInfo()
 	if err != nil {

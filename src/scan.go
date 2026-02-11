@@ -15,17 +15,56 @@ import (
 	"github.com/google/gopacket/pcap"
 )
 
+// AccessPoint represents a WiFi access point
+type AccessPoint struct {
+	BSSID    string `json:"bssid"`
+	SSID     string `json:"ssid"`
+	Channels []int  `json:"channels"`
+	RSSI     int8   `json:"rssi"`
+	Security string `json:"security"`
+	SeenAt   int64  `json:"seen_at"`
+}
+
 // packetInfo holds extracted information from a single packet
 type packetInfo struct {
-	srcAddr     string
-	dstAddr     string
-	rssi        int8
-	noise       int8
-	snr         int8
-	dataRate    uint8
-	isDataFrame bool
-	isRetry     bool
-	frameType   string
+	srcAddr      string
+	dstAddr      string
+	rssi         int8
+	noise        int8
+	snr          int8
+	dataRate     uint8
+	isDataFrame  bool
+	isRetry      bool
+	frameType    layers.Dot11Type
+	frameSubType layers.Dot11Type
+}
+
+func getDot11Layer(packet gopacket.Packet) *layers.Dot11 {
+	dot11Layer := packet.Layer(layers.LayerTypeDot11)
+	if dot11Layer == nil {
+		return nil
+	}
+
+	dot11, ok := dot11Layer.(*layers.Dot11)
+	if !ok {
+		return nil
+	}
+
+	return dot11
+}
+
+func getRadioTapLayer(packet gopacket.Packet) *layers.RadioTap {
+	rtLayer := packet.Layer(layers.LayerTypeRadioTap)
+	if rtLayer == nil {
+		return nil
+	}
+
+	radioTap, ok := rtLayer.(*layers.RadioTap)
+	if !ok {
+		return nil
+	}
+
+	return radioTap
 }
 
 // scanForAccessPoints scans for WiFi access points by capturing beacon/probe response frames
@@ -37,7 +76,7 @@ type packetInfo struct {
 func scanForAccessPoints(iface string, channels []int, scanTime time.Duration, verbose bool) (map[string]AccessPoint, error) {
 	accessPoints := make(map[string]AccessPoint)
 
-	handle, err := pcap.OpenLive(iface, 65536, true, pcap.BlockForever)
+	handle, err := pcap.OpenLive(iface, 65536, true, scanTime)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open interface %s: %w", iface, err)
 	}
@@ -51,7 +90,7 @@ func scanForAccessPoints(iface string, channels []int, scanTime time.Duration, v
 	// BPF filter for beacon and probe response frames
 	// Type 0, Subtype 8 = Beacon
 	// Type 0, Subtype 5 = Probe Response
-	if err := handle.SetBPFFilter("type mgt subtype beacon or type mgt subtype probe-resp"); err != nil {
+	if err := handle.SetBPFFilter("type mgt subtype beacon"); err != nil {
 		return nil, fmt.Errorf("failed to set BPF filter: %w", err)
 	}
 
@@ -77,31 +116,24 @@ func scanForAccessPoints(iface string, channels []int, scanTime time.Duration, v
 
 			packet := gopacket.NewPacket(data, layers.LayerTypeRadioTap, gopacket.Default)
 
-			dot11Layer := packet.Layer(layers.LayerTypeDot11)
-			if dot11Layer == nil {
+			rTap := getRadioTapLayer(packet)
+			if rTap == nil {
 				continue
 			}
 
-			dot11, ok := dot11Layer.(*layers.Dot11)
-			if !ok {
+			dot11 := getDot11Layer(packet)
+			if dot11 == nil {
 				continue
 			}
 
 			// Address3 is BSSID in beacon/probe frames
 			bssid := dot11.Address3.String()
-
-			if bssid == "" {
-				fmt.Printf("can not determine BSSID of beacon/probe frame")
-				continue
-			}
-
 			ssid := extractSSIDFromBeacon(packet)
-			rssi := extractRSSI(packet)
-			_, enc, cipher, auth := Dot11ParseEncryption(packet, dot11)
+			_, enc, cipher, auth := dot11ParseEncryption(packet, dot11)
 
 			if existing, ok := accessPoints[bssid]; ok {
 				// Use last captured signal strength
-				existing.RSSI = rssi
+				existing.RSSI = rTap.DBMAntennaSignal
 
 				if !slices.Contains(existing.Channels, channel) {
 					existing.Channels = append(existing.Channels, channel)
@@ -115,7 +147,7 @@ func scanForAccessPoints(iface string, channels []int, scanTime time.Duration, v
 					BSSID:    bssid,
 					SSID:     ssid,
 					Channels: []int{channel},
-					RSSI:     rssi,
+					RSSI:     rTap.DBMAntennaSignal,
 					Security: fmt.Sprintf("%s %s %s", enc, cipher, auth),
 					SeenAt:   ci.Timestamp.Unix(),
 				}
@@ -144,79 +176,6 @@ func extractSSIDFromBeacon(packet gopacket.Packet) string {
 		}
 	}
 	return ""
-}
-
-// extractRSSI attempts to extract RSSI from RadioTap header
-func extractRSSI(packet gopacket.Packet) int8 {
-	radioTapLayer := packet.Layer(layers.LayerTypeRadioTap)
-	if radioTapLayer == nil {
-		return -100
-	}
-	radioTap, ok := radioTapLayer.(*layers.RadioTap)
-	if !ok {
-		return -100
-	}
-	rssi := radioTap.DBMAntennaSignal
-	// RSSI of 0 indicates the value wasn't set in the RadioTap header
-	// Valid RSSI values are negative (typically -30 to -100 dBm)
-	if rssi == 0 {
-		return -100
-	}
-	return rssi
-}
-
-// joinStrings joins strings with a separator
-func joinStrings(parts []string, sep string) string {
-	result := ""
-	for i, p := range parts {
-		if i > 0 {
-			result += sep
-		}
-		result += p
-	}
-	return result
-}
-
-// getSecurityStrength returns a numeric value for security strength (lower = weaker)
-func getSecurityStrength(security string) int {
-	sec := strings.ToLower(security)
-
-	// Open/Unknown - weakest
-	if sec == "open" || sec == "unknown" || sec == "" {
-		return 0
-	}
-
-	// WEP - very weak
-	if strings.Contains(sec, "wep") {
-		return 1
-	}
-
-	// WPA (legacy) - weak
-	if strings.HasPrefix(sec, "wpa ") || sec == "wpa" {
-		if strings.Contains(sec, "enterprise") {
-			return 3
-		}
-		return 2
-	}
-
-	// WPA2 - moderate to strong
-	if strings.Contains(sec, "wpa2") {
-		if strings.Contains(sec, "enterprise") {
-			return 5
-		}
-		return 4
-	}
-
-	// WPA3 - strongest
-	if strings.Contains(sec, "wpa3") {
-		if strings.Contains(sec, "enterprise") {
-			return 7
-		}
-		return 6
-	}
-
-	// Default to middle strength if unknown format
-	return 3
 }
 
 // sortAccessPoints converts map to slice and sorts by specified criteria
@@ -323,27 +282,10 @@ func extractPacketInfo(dot11 *layers.Dot11, radioTap *layers.RadioTap) packetInf
 	info.isDataFrame = dot11.Type.MainType() == layers.Dot11TypeData
 	info.isRetry = dot11.Flags.Retry()
 
-	// switch dot11.Type {
-	// case layers.Dot11TypeMgmtAssociationResp:
-	// 	// Handle association response
-	// case layers.Dot11TypeMgmtBeacon:
-	// 	// Handle beacon
-	// case layers.Dot11TypeMgmtProbeReq:
-	// 	// Handle probe request
-	// }
-
 	// Determine frame type string
 	// see https://en.wikipedia.org/wiki/802.11_frame_types#Types_and_subtypes
-	switch dot11.Type.MainType() {
-	case layers.Dot11TypeData:
-		info.frameType = "Data"
-	case layers.Dot11TypeMgmt:
-		info.frameType = "Mgmt"
-	case layers.Dot11TypeCtrl:
-		info.frameType = "Ctrl"
-	default:
-		info.frameType = "Unkn"
-	}
+	info.frameType = dot11.Type.MainType()
+	info.frameSubType = dot11.Type
 
 	// Extract RadioTap information
 	if radioTap != nil {

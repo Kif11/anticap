@@ -363,7 +363,7 @@ func cmdScan() {
 	scanBands := scanCmd.String("b", "2g", "comma separated list of bands to scan (e.g. 2g,5g)")
 	scanChan := scanCmd.String("ch", "", "scan specified channels. This will override band selector (-b) (e.g. 6,11)")
 	// By default AP transmit every 100ms
-	scanTime := scanCmd.Int("t", 200, "time in milliseconds to monitor each channel")
+	scanTime := scanCmd.Int("t", 250, "time in milliseconds to monitor each channel")
 	sortBy := scanCmd.String("s", "signal", "sort results by: signal or security")
 	targetInterface := scanCmd.String("i", "en0", "name of wifi interface")
 	verbose := scanCmd.Bool("v", false, "output more information")
@@ -476,11 +476,6 @@ func cmdHandshake() {
 	verbose := handshakeCmd.Bool("v", false, "output more information")
 
 	handshakeCmd.Parse(os.Args[2:])
-
-	if *targetDevice == "" {
-		fmt.Println("Error: target BSSID must be specified with -t <MAC>")
-		os.Exit(1)
-	}
 
 	if !isSudo() {
 		fmt.Println("This command must be run as root")

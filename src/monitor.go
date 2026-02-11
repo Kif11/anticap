@@ -9,17 +9,6 @@ import (
 	scribble "github.com/nanobox-io/golang-scribble"
 )
 
-// AccessPoint represents a WiFi access point
-type AccessPoint struct {
-	BSSID          string `json:"bssid"`
-	SSID           string `json:"ssid"`
-	Channels       []int  `json:"channels"`
-	ActiveChannels []int  `json:"active_channels"` // Channels that observed to have data exchange
-	RSSI           int8   `json:"rssi"`
-	Security       string `json:"security"`
-	SeenAt         int64  `json:"seen_at"`
-}
-
 // openMonitorHandle opens a pcap handle configured for monitor mode
 func openMonitorHandle(iface string, targetDevice string, currentMac string) (*pcap.Handle, error) {
 	handle, err := pcap.OpenLive(iface, 65536, true, pcap.BlockForever)
