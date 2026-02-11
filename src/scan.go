@@ -2,17 +2,40 @@ package main
 
 import (
 	"fmt"
-	"os"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
-	"text/tabwriter"
 	"time"
 
+	"github.com/charmbracelet/bubbles/viewport"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcap"
+)
+
+// Styles
+var (
+	headerStyle = lipgloss.NewStyle().
+			Bold(true).
+			PaddingTop(10)
+
+	tableHeaderStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("#FAFAFA")).
+				Background(lipgloss.Color("#7D56F4")).
+				PaddingLeft(1).
+				PaddingRight(1)
+
+	goodRSSIStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#04B575"))
+	okRSSIStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFD700"))
+	weakRSSIStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF6B6B"))
+
+	secureStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#8f8f8f"))
+	mediumStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#ffd900"))
+	insecureStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#04B575"))
 )
 
 // AccessPoint represents a WiFi access point
@@ -23,6 +46,31 @@ type AccessPoint struct {
 	RSSI     int8   `json:"rssi"`
 	Security string `json:"security"`
 	SeenAt   int64  `json:"seen_at"`
+}
+
+// APUpdateMsg is a message sent when an access point is updated
+type APUpdateMsg struct {
+	BSSID string
+	AP    AccessPoint
+}
+
+// ChannelUpdateMsg is sent when starting to scan a new channel
+type ChannelUpdateMsg struct {
+	Channel int
+}
+
+// ScanCompleteMsg is sent when scanning is finished
+type ScanCompleteMsg struct{}
+
+// model represents the Bubble Tea model for the scanning UI
+type model struct {
+	accessPoints   map[string]AccessPoint
+	sortBy         string
+	scanning       bool
+	total          int
+	currentChannel int
+	viewport       viewport.Model
+	ready          bool
 }
 
 // packetInfo holds extracted information from a single packet
@@ -39,41 +87,15 @@ type packetInfo struct {
 	frameSubType layers.Dot11Type
 }
 
-func getDot11Layer(packet gopacket.Packet) *layers.Dot11 {
-	dot11Layer := packet.Layer(layers.LayerTypeDot11)
-	if dot11Layer == nil {
-		return nil
-	}
-
-	dot11, ok := dot11Layer.(*layers.Dot11)
-	if !ok {
-		return nil
-	}
-
-	return dot11
-}
-
-func getRadioTapLayer(packet gopacket.Packet) *layers.RadioTap {
-	rtLayer := packet.Layer(layers.LayerTypeRadioTap)
-	if rtLayer == nil {
-		return nil
-	}
-
-	radioTap, ok := rtLayer.(*layers.RadioTap)
-	if !ok {
-		return nil
-	}
-
-	return radioTap
-}
-
 // scanForAccessPoints scans for WiFi access points by capturing beacon/probe response frames
 // This method can get actual BSSIDs even on modern macOS where airport utility is deprecated
 // and Swift Core WiFi utils require geo location permission to see BSSIDs
 // channels: list of channels to scan (e.g., []int{1,6,11} for 2.4GHz)
 // scanTime: time to spend on each channel (e.g., 500ms)
+// updateChan: channel to send real-time updates to the UI
+// channelChan: channel to send current channel updates
 // Returns a map of BSSID -> AccessPoint
-func scanForAccessPoints(iface string, channels []int, scanTime time.Duration, verbose bool) (map[string]AccessPoint, error) {
+func scanForAccessPoints(iface string, channels []int, scanTime time.Duration, verbose bool, updateChan chan<- APUpdateMsg, channelChan chan<- ChannelUpdateMsg) (map[string]AccessPoint, error) {
 	accessPoints := make(map[string]AccessPoint)
 
 	handle, err := pcap.OpenLive(iface, 65536, true, scanTime)
@@ -98,6 +120,11 @@ func scanForAccessPoints(iface string, channels []int, scanTime time.Duration, v
 		if err := setChannel(iface, channel); err != nil {
 			fmt.Printf("Warning: failed to set channel %d: %v\n", channel, err)
 			continue
+		}
+
+		// Send channel update
+		if channelChan != nil {
+			channelChan <- ChannelUpdateMsg{Channel: channel}
 		}
 
 		if verbose {
@@ -131,9 +158,14 @@ func scanForAccessPoints(iface string, channels []int, scanTime time.Duration, v
 			ssid := extractSSIDFromBeacon(packet)
 			_, enc, cipher, auth := dot11ParseEncryption(packet, dot11)
 
+			signal := rTap.DBMAntennaSignal
+			if rTap.DBMAntennaSignal == 0 {
+				signal = -100
+			}
+
 			if existing, ok := accessPoints[bssid]; ok {
 				// Use last captured signal strength
-				existing.RSSI = rTap.DBMAntennaSignal
+				existing.RSSI = signal
 
 				if !slices.Contains(existing.Channels, channel) {
 					existing.Channels = append(existing.Channels, channel)
@@ -142,22 +174,74 @@ func scanForAccessPoints(iface string, channels []int, scanTime time.Duration, v
 				existing.SeenAt = ci.Timestamp.Unix()
 
 				accessPoints[bssid] = existing
+				// Send update
+				if updateChan != nil {
+					updateChan <- APUpdateMsg{BSSID: bssid, AP: existing}
+				}
 			} else {
 				ap := AccessPoint{
 					BSSID:    bssid,
 					SSID:     ssid,
 					Channels: []int{channel},
-					RSSI:     rTap.DBMAntennaSignal,
+					RSSI:     signal,
 					Security: fmt.Sprintf("%s %s %s", enc, cipher, auth),
 					SeenAt:   ci.Timestamp.Unix(),
 				}
 
 				accessPoints[bssid] = ap
+				// Send update
+				if updateChan != nil {
+					updateChan <- APUpdateMsg{BSSID: bssid, AP: ap}
+				}
 			}
 		}
 	}
 
 	return accessPoints, nil
+}
+
+func getDot11Layer(packet gopacket.Packet) *layers.Dot11 {
+	dot11Layer := packet.Layer(layers.LayerTypeDot11)
+	if dot11Layer == nil {
+		return nil
+	}
+
+	dot11, ok := dot11Layer.(*layers.Dot11)
+	if !ok {
+		return nil
+	}
+
+	return dot11
+}
+
+func getRadioTapLayer(packet gopacket.Packet) *layers.RadioTap {
+	rtLayer := packet.Layer(layers.LayerTypeRadioTap)
+	if rtLayer == nil {
+		return nil
+	}
+
+	radioTap, ok := rtLayer.(*layers.RadioTap)
+	if !ok {
+		return nil
+	}
+
+	return radioTap
+}
+
+// handlePacket extracts Dot11 and RadioTap layers from a packet
+func handlePacket(p gopacket.Packet) (*layers.Dot11, *layers.RadioTap) {
+	var dot11 *layers.Dot11
+	var radioTap *layers.RadioTap
+
+	if rtLayer := p.Layer(layers.LayerTypeRadioTap); rtLayer != nil {
+		radioTap, _ = rtLayer.(*layers.RadioTap)
+	}
+
+	if d11Layer := p.Layer(layers.LayerTypeDot11); d11Layer != nil {
+		dot11, _ = d11Layer.(*layers.Dot11)
+	}
+
+	return dot11, radioTap
 }
 
 // extractSSIDFromBeacon extracts SSID from 802.11 Information Elements
@@ -214,175 +298,150 @@ func joinInts(ints []int) string {
 	return str
 }
 
-// printAccessPoints displays discovered access points in a formatted table
-// sortByWeakSecurity: if true, sort by security (weakest first); if false, sort by RSSI (strongest first)
-func printAccessPoints(aps map[string]AccessPoint, sort string) {
-	if len(aps) == 0 {
-		fmt.Println("No access points found")
-		return
+// Init initializes the model
+func (m model) Init() tea.Cmd {
+	return nil
+}
+
+// Update handles messages
+func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+	var cmds []tea.Cmd
+
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		if msg.String() == "q" || msg.String() == "ctrl+c" {
+			return m, tea.Quit
+		}
+		// Handle viewport keys
+		m.viewport, cmd = m.viewport.Update(msg)
+		cmds = append(cmds, cmd)
+	case tea.WindowSizeMsg:
+		if !m.ready {
+			// Initialize viewport
+			m.viewport = viewport.New(msg.Width, msg.Height-3) // Leave space for header
+			m.viewport.SetContent(m.generateTableContent())
+			m.ready = true
+		} else {
+			m.viewport.Width = msg.Width
+			m.viewport.Height = msg.Height - 3
+		}
+	case APUpdateMsg:
+		if m.accessPoints == nil {
+			m.accessPoints = make(map[string]AccessPoint)
+		}
+		m.accessPoints[msg.BSSID] = msg.AP
+		m.total = len(m.accessPoints)
+		// Update viewport content
+		if m.ready {
+			m.viewport.SetContent(m.generateTableContent())
+		}
+	case ChannelUpdateMsg:
+		m.currentChannel = msg.Channel
+	case ScanCompleteMsg:
+		m.scanning = false
 	}
 
-	// Sort access points
-	apList := sortAccessPoints(aps, sort)
+	return m, tea.Batch(cmds...)
+}
 
-	const padding = 2
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, padding, ' ', tabwriter.AlignRight)
+// generateTableContent generates the table content for the viewport
+func (m model) generateTableContent() string {
+	if len(m.accessPoints) == 0 {
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("#888888")).Render("No access points found yet...")
+	}
 
-	fmt.Fprintln(w, "\nBSSID\tSSID\tChannel\tRSSI\tSecurity\t")
-	fmt.Fprintln(w, "\t\t\t\t\t")
+	apList := sortAccessPoints(m.accessPoints, m.sortBy)
+
+	var content strings.Builder
+
+	// Table header with styling - use fixed widths
+	bssidHeader := lipgloss.NewStyle().Width(17).Align(lipgloss.Left).Render(tableHeaderStyle.Render("BSSID"))
+	ssidHeader := lipgloss.NewStyle().Width(32).Align(lipgloss.Left).Render(tableHeaderStyle.Render("SSID"))
+	channelHeader := lipgloss.NewStyle().Width(24).Align(lipgloss.Left).Render(tableHeaderStyle.Render("Channel"))
+	rssiHeader := lipgloss.NewStyle().Width(12).Align(lipgloss.Left).Render(tableHeaderStyle.Render("RSSI"))
+	securityHeader := tableHeaderStyle.Render("Security")
+
+	content.WriteString(lipgloss.JoinHorizontal(lipgloss.Left,
+		bssidHeader, "  ",
+		ssidHeader, "  ",
+		channelHeader, "  ",
+		rssiHeader, "  ",
+		securityHeader) + "\n")
+	content.WriteString(strings.Repeat("─", 120) + "\n")
+
+	// Table rows
 	for _, ap := range apList {
 		ssid := ap.SSID
 		if ssid == "" {
 			ssid = "<hidden>"
 		}
+		if len(ssid) > 32 {
+			ssid = ssid[:29] + "..."
+		}
+
 		security := ap.Security
 		if security == "" {
 			security = "Unknown"
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%d dBm\t%s\t\n", ap.BSSID, ssid, joinInts(ap.Channels), ap.RSSI, security)
-	}
-	fmt.Fprintln(w, "\t\t\t\t\t")
-	w.Flush()
 
-	fmt.Printf("\nTotal: %d access points\n", len(aps))
+		// Color code RSSI
+		rssiStr := fmt.Sprintf("%d dBm", ap.RSSI)
+		var styledRSSI string
+		if ap.RSSI >= -60 {
+			styledRSSI = goodRSSIStyle.Render(rssiStr)
+		} else if ap.RSSI >= -70 {
+			styledRSSI = okRSSIStyle.Render(rssiStr)
+		} else {
+			styledRSSI = weakRSSIStyle.Render(rssiStr)
+		}
+
+		// Color code security
+		var styledSecurity string
+		if strings.Contains(security, "WPA3") || strings.Contains(security, "SAE") {
+			styledSecurity = secureStyle.Render(security)
+		} else if strings.Contains(security, "WPA2") {
+			styledSecurity = secureStyle.Render(security)
+		} else if strings.Contains(security, "WPA") {
+			styledSecurity = mediumStyle.Render(security)
+		} else if strings.Contains(security, "WEP") || strings.Contains(security, "OPEN") {
+			styledSecurity = insecureStyle.Render(security)
+		} else {
+			styledSecurity = security
+		}
+
+		// Build row
+		bssidCol := lipgloss.NewStyle().Width(17).Align(lipgloss.Left).Render(ap.BSSID)
+		ssidCol := lipgloss.NewStyle().Width(32).Align(lipgloss.Left).Render(ssid)
+		channelCol := lipgloss.NewStyle().Width(24).Align(lipgloss.Left).Render(joinInts(ap.Channels))
+		rssiCol := lipgloss.NewStyle().Width(12).Align(lipgloss.Left).Render(styledRSSI)
+
+		row := lipgloss.JoinHorizontal(lipgloss.Left,
+			bssidCol, "  ",
+			ssidCol, "  ",
+			channelCol, "  ",
+			rssiCol, "  ",
+			styledSecurity)
+		content.WriteString(row + "\n")
+	}
+
+	return content.String()
 }
 
-// handlePacket extracts Dot11 and RadioTap layers from a packet
-func handlePacket(p gopacket.Packet) (*layers.Dot11, *layers.RadioTap) {
-	var dot11 *layers.Dot11
-	var radioTap *layers.RadioTap
-
-	if rtLayer := p.Layer(layers.LayerTypeRadioTap); rtLayer != nil {
-		radioTap, _ = rtLayer.(*layers.RadioTap)
+// View renders the UI
+func (m model) View() string {
+	if !m.ready {
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("#7D56F4")).Render("Initializing...")
 	}
 
-	if d11Layer := p.Layer(layers.LayerTypeDot11); d11Layer != nil {
-		dot11, _ = d11Layer.(*layers.Dot11)
-	}
-
-	return dot11, radioTap
-}
-
-// extractPacketInfo extracts all relevant information from Dot11 and RadioTap layers
-func extractPacketInfo(dot11 *layers.Dot11, radioTap *layers.RadioTap) packetInfo {
-	info := packetInfo{
-		rssi:     -100,
-		noise:    -100,
-		dataRate: 0,
-	}
-
-	if dot11.Address1 != nil {
-		info.dstAddr = dot11.Address1.String()
-	}
-	if dot11.Address2 != nil {
-		info.srcAddr = dot11.Address2.String()
-	}
-
-	// Extract frame type information
-	info.isDataFrame = dot11.Type.MainType() == layers.Dot11TypeData
-	info.isRetry = dot11.Flags.Retry()
-
-	// Determine frame type string
-	// see https://en.wikipedia.org/wiki/802.11_frame_types#Types_and_subtypes
-	info.frameType = dot11.Type.MainType()
-	info.frameSubType = dot11.Type
-
-	// Extract RadioTap information
-	if radioTap != nil {
-		info.rssi = radioTap.DBMAntennaSignal
-		info.noise = radioTap.DBMAntennaNoise
-		info.dataRate = uint8(radioTap.Rate)
-	}
-	info.snr = info.rssi - info.noise
-
-	return info
-}
-
-// updateDevice updates or creates a device entry based on packet info
-func updateDevice(devices map[string]device, info packetInfo) device {
-	var dev device
-
-	if existing, ok := devices[info.dstAddr]; ok {
-		dev = existing
-		dev.PCount++
-		// Update RSSI with running average
-		dev.AvgRSSI = int8((int(dev.AvgRSSI)*(dev.PCount-1) + int(info.rssi)) / dev.PCount)
-		dev.LastRSSI = info.rssi
-		dev.LastSeen = time.Now().Unix()
-		if info.isRetry {
-			dev.RetryCount++
-		}
-		if info.isDataFrame {
-			dev.DataFrameCount++
-		}
-		if info.dataRate > dev.MaxDataRate {
-			dev.MaxDataRate = info.dataRate
-		}
-		dev.SNR = info.snr
+	// Header
+	var header string
+	if m.scanning {
+		header = headerStyle.Render(fmt.Sprintf("📡 Scanning channel: %d, 📊 Total APs: %d ... 'q' to quit", m.currentChannel, m.total))
 	} else {
-		retryCount := 0
-		if info.isRetry {
-			retryCount = 1
-		}
-		dataFrameCount := 0
-		if info.isDataFrame {
-			dataFrameCount = 1
-		}
-		dev = device{
-			Address:        info.dstAddr,
-			PCount:         1,
-			Rating:         0,
-			AvgRSSI:        info.rssi,
-			LastRSSI:       info.rssi,
-			LastSeen:       time.Now().Unix(),
-			RetryCount:     retryCount,
-			DataFrameCount: dataFrameCount,
-			MaxDataRate:    info.dataRate,
-			SNR:            info.snr,
-		}
+		header = headerStyle.Render(fmt.Sprintf("📡 Scan Complete!, 📊 Total APs: %d ... 'q' to quit", m.total))
 	}
 
-	return dev
-}
-
-// printPacketInfo prints real-time packet information as it arrives
-func printPacketInfo(info packetInfo, dev device) {
-	retryFlag := " "
-	if info.isRetry {
-		retryFlag = "R"
-	}
-	dataRateMbps := float64(info.dataRate) * 0.5
-	fmt.Printf("[%s%s] %s -> %s | RSSI: %d dBm | SNR: %d | Rate: %.1f Mbps | Pkts: %d\n",
-		info.frameType, retryFlag, info.srcAddr, info.dstAddr,
-		info.rssi, info.snr, dataRateMbps, dev.PCount)
-}
-
-// printDeviceSummary prints a summary table of all discovered devices
-func printDeviceSummary(devices map[string]device) {
-	sortedDevices := sortDevices(devices)
-
-	fmt.Printf("\n%s\n", strings.Repeat("-", 80))
-	fmt.Printf("Total %d devices discovered\n\n", len(devices))
-
-	const padding = 2
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, padding, ' ', tabwriter.AlignRight)
-
-	fmt.Fprintln(w, "Address\tPackets\tRSSI\tSNR\tDataRate\tRetry%\tData%\t")
-	fmt.Fprintln(w, "\t\t\t\t\t\t\t")
-	for _, d := range sortedDevices {
-		retryPct := float64(0)
-		if d.PCount > 0 {
-			retryPct = float64(d.RetryCount) / float64(d.PCount) * 100
-		}
-		dataPct := float64(0)
-		if d.PCount > 0 {
-			dataPct = float64(d.DataFrameCount) / float64(d.PCount) * 100
-		}
-		// RadioTap Rate is in units of 500 Kbps, so multiply by 0.5 to get Mbps
-		dataRateMbps := float64(d.MaxDataRate) * 0.5
-		fmt.Fprintf(w, "%s\t%d\t%d dBm\t%d\t%.1f Mbps\t%.1f%%\t%.1f%%\t\n",
-			d.Address, d.PCount, d.AvgRSSI, d.SNR, dataRateMbps, retryPct, dataPct)
-	}
-	fmt.Fprintln(w, "\t\t\t\t\t\t\t")
-	w.Flush()
+	// Combine header and viewport with a table
+	return lipgloss.JoinVertical(lipgloss.Left, header, "", m.viewport.View())
 }

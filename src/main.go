@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	scribble "github.com/nanobox-io/golang-scribble"
 )
 
@@ -147,7 +148,7 @@ func resolveSSIDFromBSSID(bssid, iface string, verbose bool) (string, error) {
 	channels := append(defaultChannels2G, defaultChannels5G...)
 	scanTime := 300 * time.Millisecond
 
-	aps, err := scanForAccessPoints(iface, channels, scanTime, verbose)
+	aps, err := scanForAccessPoints(iface, channels, scanTime, verbose, nil, nil)
 	if err != nil {
 		return "", fmt.Errorf("scan failed: %w", err)
 	}
@@ -400,18 +401,60 @@ func cmdScan() {
 		channels = parseChanFromArg(*scanChan)
 	}
 
-	aps, err := scanForAccessPoints(*targetInterface, channels, time.Duration(*scanTime)*time.Millisecond, *verbose)
-	if err != nil {
-		fmt.Printf("Error scanning for access points: %v\n", err)
-		return
+	// Create Bubble Tea model
+	m := model{
+		sortBy:   *sortBy,
+		scanning: true,
 	}
 
-	// Populate network cache
-	if err := populateNetworkCache(aps, *verbose); err != nil {
-		fmt.Printf("Warning: failed to populate network cache: %v\n", err)
-	}
+	// Channel for updates
+	updateChan := make(chan APUpdateMsg, 100)
+	channelChan := make(chan ChannelUpdateMsg, 10)
 
-	printAccessPoints(aps, *sortBy)
+	// Run scan in goroutine
+	go func() {
+		defer close(updateChan)
+		defer close(channelChan)
+		aps, err := scanForAccessPoints(*targetInterface, channels, time.Duration(*scanTime)*time.Millisecond, *verbose, updateChan, channelChan)
+		if err != nil {
+			fmt.Printf("Error scanning for access points: %v\n", err)
+			return
+		}
+
+		// Populate network cache
+		if err := populateNetworkCache(aps, *verbose); err != nil {
+			fmt.Printf("Warning: failed to populate network cache: %v\n", err)
+		}
+	}()
+
+	// Create Bubble Tea program
+	p := tea.NewProgram(m)
+
+	// Handle updates in a goroutine
+	go func() {
+		for {
+			select {
+			case msg, ok := <-updateChan:
+				if !ok {
+					goto done
+				}
+				p.Send(msg)
+			case chMsg, ok := <-channelChan:
+				if !ok {
+					continue
+				}
+				p.Send(chMsg)
+			}
+		}
+	done:
+		p.Send(ScanCompleteMsg{})
+	}()
+
+	// Run the program
+	if _, err := p.Run(); err != nil {
+		fmt.Printf("Error running program: %v\n", err)
+		os.Exit(1)
+	}
 }
 
 // cmdCapture runs packet capture only
