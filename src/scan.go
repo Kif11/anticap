@@ -20,7 +20,11 @@ import (
 var (
 	headerStyle = lipgloss.NewStyle().
 			Bold(true).
-			PaddingTop(10)
+			PaddingTop(1)
+
+	errorStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#FF6B6B")).
+			Padding(1, 0, 1, 0)
 
 	tableHeaderStyle = lipgloss.NewStyle().
 				Bold(true).
@@ -70,6 +74,7 @@ type model struct {
 	total          int
 	currentChannel int
 	viewport       viewport.Model
+	err            error
 	ready          bool
 }
 
@@ -95,7 +100,7 @@ type packetInfo struct {
 // updateChan: channel to send real-time updates to the UI
 // channelChan: channel to send current channel updates
 // Returns a map of BSSID -> AccessPoint
-func scanForAccessPoints(iface string, channels []int, scanTime time.Duration, verbose bool, updateChan chan<- APUpdateMsg, channelChan chan<- ChannelUpdateMsg) (map[string]AccessPoint, error) {
+func scanForAccessPoints(iface string, channels []int, scanTime time.Duration, verbose bool, updateCh chan<- APUpdateMsg, channelCh chan<- ChannelUpdateMsg, errCh chan<- error) (map[string]AccessPoint, error) {
 	accessPoints := make(map[string]AccessPoint)
 
 	handle, err := pcap.OpenLive(iface, 65536, true, scanTime)
@@ -118,17 +123,13 @@ func scanForAccessPoints(iface string, channels []int, scanTime time.Duration, v
 
 	for _, channel := range channels {
 		if err := setChannel(iface, channel); err != nil {
-			fmt.Printf("Warning: failed to set channel %d: %v\n", channel, err)
+			errCh <- fmt.Errorf("failed to set channel %d: %v", channel, err)
 			continue
 		}
 
 		// Send channel update
-		if channelChan != nil {
-			channelChan <- ChannelUpdateMsg{Channel: channel}
-		}
-
-		if verbose {
-			fmt.Printf("Scanning channel %d...\n", channel)
+		if channelCh != nil {
+			channelCh <- ChannelUpdateMsg{Channel: channel}
 		}
 
 		// Capture packets for scanTime on this channel
@@ -137,7 +138,7 @@ func scanForAccessPoints(iface string, channels []int, scanTime time.Duration, v
 		for time.Now().Before(deadline) {
 			data, ci, err := handle.ReadPacketData()
 			if err != nil {
-				fmt.Printf("Warning: error reading packet on channel %d: %v\n", channel, err)
+				errCh <- fmt.Errorf("error reading packet on channel %d: %v", channel, err)
 				continue
 			}
 
@@ -175,8 +176,8 @@ func scanForAccessPoints(iface string, channels []int, scanTime time.Duration, v
 
 				accessPoints[bssid] = existing
 				// Send update
-				if updateChan != nil {
-					updateChan <- APUpdateMsg{BSSID: bssid, AP: existing}
+				if updateCh != nil {
+					updateCh <- APUpdateMsg{BSSID: bssid, AP: existing}
 				}
 			} else {
 				ap := AccessPoint{
@@ -190,8 +191,8 @@ func scanForAccessPoints(iface string, channels []int, scanTime time.Duration, v
 
 				accessPoints[bssid] = ap
 				// Send update
-				if updateChan != nil {
-					updateChan <- APUpdateMsg{BSSID: bssid, AP: ap}
+				if updateCh != nil {
+					updateCh <- APUpdateMsg{BSSID: bssid, AP: ap}
 				}
 			}
 		}
@@ -319,7 +320,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		if !m.ready {
 			// Initialize viewport
-			m.viewport = viewport.New(msg.Width, msg.Height-3) // Leave space for header
+			m.viewport = viewport.New(msg.Width, msg.Height-6) // Leave space for header
 			m.viewport.SetContent(m.generateTableContent())
 			m.ready = true
 		} else {
@@ -340,6 +341,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.currentChannel = msg.Channel
 	case ScanCompleteMsg:
 		m.scanning = false
+	case error:
+		m.err = msg
 	}
 
 	return m, tea.Batch(cmds...)
@@ -358,7 +361,7 @@ func (m model) generateTableContent() string {
 	// Table header with styling - use fixed widths
 	bssidHeader := lipgloss.NewStyle().Width(17).Align(lipgloss.Left).Render(tableHeaderStyle.Render("BSSID"))
 	ssidHeader := lipgloss.NewStyle().Width(32).Align(lipgloss.Left).Render(tableHeaderStyle.Render("SSID"))
-	channelHeader := lipgloss.NewStyle().Width(24).Align(lipgloss.Left).Render(tableHeaderStyle.Render("Channel"))
+	channelHeader := lipgloss.NewStyle().Width(48).Align(lipgloss.Left).Render(tableHeaderStyle.Render("Channel"))
 	rssiHeader := lipgloss.NewStyle().Width(12).Align(lipgloss.Left).Render(tableHeaderStyle.Render("RSSI"))
 	securityHeader := tableHeaderStyle.Render("Security")
 
@@ -413,7 +416,7 @@ func (m model) generateTableContent() string {
 		// Build row
 		bssidCol := lipgloss.NewStyle().Width(17).Align(lipgloss.Left).Render(ap.BSSID)
 		ssidCol := lipgloss.NewStyle().Width(32).Align(lipgloss.Left).Render(ssid)
-		channelCol := lipgloss.NewStyle().Width(24).Align(lipgloss.Left).Render(joinInts(ap.Channels))
+		channelCol := lipgloss.NewStyle().Width(48).Align(lipgloss.Left).Render(joinInts(ap.Channels))
 		rssiCol := lipgloss.NewStyle().Width(12).Align(lipgloss.Left).Render(styledRSSI)
 
 		row := lipgloss.JoinHorizontal(lipgloss.Left,
@@ -442,6 +445,11 @@ func (m model) View() string {
 		header = headerStyle.Render(fmt.Sprintf("📡 Scan Complete!, 📊 Total APs: %d ... 'q' to quit", m.total))
 	}
 
+	var errorLine string = ""
+	if m.err != nil {
+		errorLine = errorStyle.Render(fmt.Sprintf("⚠️  %s", m.err.Error()))
+	}
+
 	// Combine header and viewport with a table
-	return lipgloss.JoinVertical(lipgloss.Left, header, "", m.viewport.View())
+	return lipgloss.JoinVertical(lipgloss.Left, header, errorLine, m.viewport.View())
 }
