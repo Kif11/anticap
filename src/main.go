@@ -401,12 +401,6 @@ func cmdScan() {
 		channels = parseChanFromArg(*scanChan)
 	}
 
-	// Create Bubble Tea model
-	m := model{
-		sortBy:   *sortBy,
-		scanning: true,
-	}
-
 	// Channel for updates
 	updateCh := make(chan APUpdateMsg, 100)
 	channelCh := make(chan ChannelUpdateMsg, 10)
@@ -428,6 +422,12 @@ func cmdScan() {
 		}
 	}()
 
+	// Create Bubble Tea model
+	m := scanModel{
+		sortBy:   *sortBy,
+		scanning: true,
+	}
+
 	// Create Bubble Tea program
 	p := tea.NewProgram(m)
 
@@ -447,7 +447,7 @@ func cmdScan() {
 				p.Send(chMsg)
 			case err, ok := <-errCh:
 				if !ok {
-					goto done
+					continue
 				}
 				p.Send(err)
 			}
