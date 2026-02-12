@@ -2,9 +2,8 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"slices"
-	"sort"
-	"strconv"
 	"time"
 
 	"github.com/google/gopacket"
@@ -12,14 +11,40 @@ import (
 	"github.com/google/gopacket/pcap"
 )
 
+type channelStats struct {
+	numPackets int
+}
+
 // AccessPoint represents a WiFi access point
 type AccessPoint struct {
-	BSSID    string `json:"bssid"`
-	SSID     string `json:"ssid"`
-	Channels []int  `json:"channels"`
-	RSSI     int8   `json:"rssi"`
-	Security string `json:"security"`
-	SeenAt   int64  `json:"seen_at"`
+	BSSID        string               `json:"bssid"`
+	SSID         string               `json:"ssid"`
+	Channels     []int                `json:"channels"`
+	ChannelStats map[int]channelStats `json:"channel_stats"`
+	RSSI         int8                 `json:"rssi"`
+	Security     string               `json:"security"`
+	SeenAt       int64                `json:"seen_at"`
+}
+
+// deepCopy creates a deep copy of the AccessPoint
+func (ap AccessPoint) deepCopy() AccessPoint {
+	channels := make([]int, len(ap.Channels))
+	copy(channels, ap.Channels)
+
+	channelStats := make(map[int]channelStats)
+	for k, v := range ap.ChannelStats {
+		channelStats[k] = v
+	}
+
+	return AccessPoint{
+		BSSID:        ap.BSSID,
+		SSID:         ap.SSID,
+		Channels:     channels,
+		ChannelStats: channelStats,
+		RSSI:         ap.RSSI,
+		Security:     ap.Security,
+		SeenAt:       ap.SeenAt,
+	}
 }
 
 // packetInfo holds extracted information from a single packet
@@ -47,7 +72,7 @@ type packetInfo struct {
 func scanForAccessPoints(iface string, channels []int, scanTime time.Duration, verbose bool, updateCh chan<- APUpdateMsg, channelCh chan<- ChannelUpdateMsg, errCh chan<- error) (map[string]AccessPoint, error) {
 	accessPoints := make(map[string]AccessPoint)
 
-	handle, err := pcap.OpenLive(iface, 65536, true, scanTime)
+	handle, err := pcap.OpenLive(iface, 65536, true, 100*time.Millisecond)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open interface %s: %w", iface, err)
 	}
@@ -66,6 +91,7 @@ func scanForAccessPoints(iface string, channels []int, scanTime time.Duration, v
 	}
 
 	for _, channel := range channels {
+		// fmt.Printf("\n[D] Setting chan: %d\n", channel)
 		if err := setChannel(iface, channel); err != nil {
 			errCh <- fmt.Errorf("failed to set channel %d: %v", channel, err)
 			continue
@@ -78,13 +104,18 @@ func scanForAccessPoints(iface string, channels []int, scanTime time.Duration, v
 
 		// Capture packets for scanTime on this channel
 		deadline := time.Now().Add(scanTime)
-
+		numPackets := 0
 		for time.Now().Before(deadline) {
 			data, ci, err := handle.ReadPacketData()
 			if err != nil {
 				errCh <- fmt.Errorf("error reading packet on channel %d: %v", channel, err)
 				continue
 			}
+
+			// fmt.Println("[D] Got packet")
+			os.Stdout.Sync()
+
+			numPackets++
 
 			packet := gopacket.NewPacket(data, layers.LayerTypeRadioTap, gopacket.Default)
 
@@ -117,26 +148,30 @@ func scanForAccessPoints(iface string, channels []int, scanTime time.Duration, v
 				}
 
 				existing.SeenAt = ci.Timestamp.Unix()
+				stats := existing.ChannelStats[channel]
+				stats.numPackets = numPackets
+				existing.ChannelStats[channel] = stats
 
 				accessPoints[bssid] = existing
 				// Send update
 				if updateCh != nil {
-					updateCh <- APUpdateMsg{BSSID: bssid, AP: existing}
+					updateCh <- APUpdateMsg{BSSID: bssid, AP: existing.deepCopy()}
 				}
 			} else {
 				ap := AccessPoint{
-					BSSID:    bssid,
-					SSID:     ssid,
-					Channels: []int{channel},
-					RSSI:     signal,
-					Security: fmt.Sprintf("%s %s %s", enc, cipher, auth),
-					SeenAt:   ci.Timestamp.Unix(),
+					BSSID:        bssid,
+					SSID:         ssid,
+					Channels:     []int{channel},
+					RSSI:         signal,
+					ChannelStats: map[int]channelStats{channel: {numPackets: numPackets}},
+					Security:     fmt.Sprintf("%s %s %s", enc, cipher, auth),
+					SeenAt:       ci.Timestamp.Unix(),
 				}
 
 				accessPoints[bssid] = ap
 				// Send update
 				if updateCh != nil {
-					updateCh <- APUpdateMsg{BSSID: bssid, AP: ap}
+					updateCh <- APUpdateMsg{BSSID: bssid, AP: ap.deepCopy()}
 				}
 			}
 		}
@@ -205,40 +240,4 @@ func extractSSIDFromBeacon(packet gopacket.Packet) string {
 		}
 	}
 	return ""
-}
-
-// sortAccessPoints converts map to slice and sorts by specified criteria
-func sortAccessPoints(aps map[string]AccessPoint, sortType string) []AccessPoint {
-	// Convert map to slice
-	apList := make([]AccessPoint, 0, len(aps))
-	for _, ap := range aps {
-		apList = append(apList, ap)
-	}
-
-	if sortType == "security" {
-		// Sort by security strength (weakest first), then by RSSI (strongest first) for ties
-		sort.Slice(apList, func(i, j int) bool {
-			strengthI := getSecurityStrength(apList[i].Security)
-			strengthJ := getSecurityStrength(apList[j].Security)
-			if strengthI != strengthJ {
-				return strengthI < strengthJ // Weakest first
-			}
-			return apList[i].RSSI > apList[j].RSSI // Stronger signal first for ties
-		})
-	} else {
-		// Sort by signal strength (strongest RSSI first - less negative = stronger)
-		sort.Slice(apList, func(i, j int) bool {
-			return apList[i].RSSI > apList[j].RSSI
-		})
-	}
-
-	return apList
-}
-
-func joinInts(ints []int) string {
-	str := ""
-	for _, i := range ints {
-		str += " " + strconv.Itoa(i)
-	}
-	return str
 }

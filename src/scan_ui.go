@@ -2,6 +2,9 @@ package main
 
 import (
 	"fmt"
+	"math"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/viewport"
@@ -30,6 +33,7 @@ type scanModel struct {
 	scanning       bool
 	total          int
 	currentChannel int
+	busyChannel    int
 	viewport       viewport.Model
 	err            error
 	ready          bool
@@ -53,11 +57,13 @@ var (
 
 	goodRSSIStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#04B575"))
 	okRSSIStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFD700"))
-	weakRSSIStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF6B6B"))
+	weakRSSIStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#8f8f8f"))
 
 	secureStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#8f8f8f"))
 	mediumStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#ffd900"))
 	insecureStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#04B575"))
+
+	textAccent = lipgloss.NewStyle().Foreground(lipgloss.Color("#9804b5"))
 )
 
 // Init initializes the model
@@ -79,25 +85,30 @@ func (m scanModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport, cmd = m.viewport.Update(msg)
 		cmds = append(cmds, cmd)
 	case tea.WindowSizeMsg:
+		headerHeight := 6
 		if !m.ready {
 			// Initialize viewport
-			m.viewport = viewport.New(msg.Width, msg.Height-6) // Leave space for header
+			m.viewport = viewport.New(msg.Width, msg.Height-headerHeight)
 			m.viewport.SetContent(makeAPTable(m))
 			m.ready = true
 		} else {
 			m.viewport.Width = msg.Width
-			m.viewport.Height = msg.Height - 3
+			m.viewport.Height = msg.Height - headerHeight
 		}
 	case APUpdateMsg:
 		if m.accessPoints == nil {
 			m.accessPoints = make(map[string]AccessPoint)
 		}
+
 		m.accessPoints[msg.BSSID] = msg.AP
 		m.total = len(m.accessPoints)
 		// Update viewport content
 		if m.ready {
 			m.viewport.SetContent(makeAPTable(m))
 		}
+
+		m.busyChannel = getBusyChannel(m.accessPoints)
+
 	case ChannelUpdateMsg:
 		m.currentChannel = msg.Channel
 	case ScanCompleteMsg:
@@ -109,6 +120,10 @@ func (m scanModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
+func ta(i int) string {
+	return textAccent.Render(strconv.Itoa(i))
+}
+
 // View renders the UI
 func (m scanModel) View() string {
 	if !m.ready {
@@ -118,9 +133,9 @@ func (m scanModel) View() string {
 	// Header
 	var header string
 	if m.scanning {
-		header = headerStyle.Render(fmt.Sprintf("📡 Scanning channel: %d, Total APs: %d ... 'q' to quit", m.currentChannel, m.total))
+		header = headerStyle.Render(fmt.Sprintf("📡 Scanning channel: %s, Total APs: %s, Busiest channel: %s ... 'q' to quit", ta(m.currentChannel), ta(m.total), ta(m.busyChannel)))
 	} else {
-		header = headerStyle.Render(fmt.Sprintf("📡 Scan Complete!, Total APs: %d ... 'q' to quit", m.total))
+		header = headerStyle.Render(fmt.Sprintf("📡 Scan Complete!, Total APs: %s, Busiest channel: %s ... 'q' to quit", ta(m.total), ta(m.busyChannel)))
 	}
 
 	var errorLine string = ""
@@ -130,6 +145,86 @@ func (m scanModel) View() string {
 
 	// Combine header and viewport with a table
 	return lipgloss.JoinVertical(lipgloss.Left, header, errorLine, m.viewport.View())
+}
+
+// Get top N channels with most amount of packets
+func getActiveChannels(chs map[int]channelStats, n int) []int {
+	pairs := [][]int{}
+	for ch, st := range chs {
+		pairs = append(pairs, []int{ch, st.numPackets})
+	}
+	sort.Slice(pairs, func(i, j int) bool {
+		return pairs[i][1] > pairs[j][1]
+	})
+	best := []int{}
+	num := int(math.Min(float64(n), float64(len(pairs))))
+	for i := range num {
+		best = append(best, pairs[i][0])
+	}
+	return best
+}
+
+// Determine the busiest channel or channel with the most amount of traffic
+func getBusyChannel(aps map[string]AccessPoint) int {
+	chans := make(map[int]int)
+	for _, ap := range aps {
+		for ch, inf := range ap.ChannelStats {
+			numPack, ok := chans[ch]
+			if ok {
+				chans[ch] = numPack + inf.numPackets
+			} else {
+				chans[ch] = inf.numPackets
+			}
+		}
+	}
+	busyChan := 0
+	maxPackets := 0
+	for ch, numPacket := range chans {
+		if numPacket > maxPackets {
+			maxPackets = numPacket
+			busyChan = ch
+		}
+	}
+	return busyChan
+}
+
+func joinInts(ints []int) string {
+	str := ""
+	for i, num := range ints {
+		if i > 0 {
+			str += " "
+		}
+		str += strconv.Itoa(num)
+	}
+	return str
+}
+
+// sortAccessPoints converts map to slice and sorts by specified criteria
+func sortAccessPoints(aps map[string]AccessPoint, sortType string) []AccessPoint {
+	// Convert map to slice
+	apList := make([]AccessPoint, 0, len(aps))
+	for _, ap := range aps {
+		apList = append(apList, ap)
+	}
+
+	if sortType == "security" {
+		// Sort by security strength (weakest first), then by RSSI (strongest first) for ties
+		sort.Slice(apList, func(i, j int) bool {
+			strengthI := getSecurityStrength(apList[i].Security)
+			strengthJ := getSecurityStrength(apList[j].Security)
+			if strengthI != strengthJ {
+				return strengthI < strengthJ // Weakest first
+			}
+			return apList[i].RSSI > apList[j].RSSI // Stronger signal first for ties
+		})
+	} else {
+		// Sort by signal strength (strongest RSSI first - less negative = stronger)
+		sort.Slice(apList, func(i, j int) bool {
+			return apList[i].RSSI > apList[j].RSSI
+		})
+	}
+
+	return apList
 }
 
 // generates the table content for the viewport
@@ -145,7 +240,7 @@ func makeAPTable(m scanModel) string {
 	// Table header with styling - use fixed widths
 	bssidHeader := lipgloss.NewStyle().Width(17).Align(lipgloss.Left).Render(tableHeaderStyle.Render("BSSID"))
 	ssidHeader := lipgloss.NewStyle().Width(32).Align(lipgloss.Left).Render(tableHeaderStyle.Render("SSID"))
-	channelHeader := lipgloss.NewStyle().Width(48).Align(lipgloss.Left).Render(tableHeaderStyle.Render("Channel"))
+	channelHeader := lipgloss.NewStyle().Width(12).Align(lipgloss.Left).Render(tableHeaderStyle.Render("Channel"))
 	rssiHeader := lipgloss.NewStyle().Width(12).Align(lipgloss.Left).Render(tableHeaderStyle.Render("RSSI"))
 	securityHeader := tableHeaderStyle.Render("Security")
 
@@ -197,10 +292,12 @@ func makeAPTable(m scanModel) string {
 			styledSecurity = security
 		}
 
+		activeChannels := getActiveChannels(ap.ChannelStats, 3)
+
 		// Build row
 		bssidCol := lipgloss.NewStyle().Width(17).Align(lipgloss.Left).Render(ap.BSSID)
 		ssidCol := lipgloss.NewStyle().Width(32).Align(lipgloss.Left).Render(ssid)
-		channelCol := lipgloss.NewStyle().Width(48).Align(lipgloss.Left).Render(joinInts(ap.Channels))
+		channelCol := lipgloss.NewStyle().Width(12).Align(lipgloss.Left).Render(joinInts(activeChannels))
 		rssiCol := lipgloss.NewStyle().Width(12).Align(lipgloss.Left).Render(styledRSSI)
 
 		row := lipgloss.JoinHorizontal(lipgloss.Left,
