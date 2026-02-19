@@ -2,14 +2,10 @@ package main
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
-	"github.com/google/gopacket/pcap"
-	"github.com/google/gopacket/pcapgo"
 )
 
 // HandshakeFrame represents a captured handshake message
@@ -80,23 +76,8 @@ func getClientMAC(dot11 *layers.Dot11) string {
 }
 
 // Processes a packet and checks if it's part of a 4-way handshake
-func parseHandshakeFrame(packet gopacket.Packet) (bool, HandshakeFrame) {
-	// Get Dot11 layer
-	dot11Layer := packet.Layer(layers.LayerTypeDot11)
-	if dot11Layer == nil {
-		return false, HandshakeFrame{}
-	}
-	dot11, ok := dot11Layer.(*layers.Dot11)
-	if !ok {
-		return false, HandshakeFrame{}
-	}
-
-	// Get EAPOLKey layer
-	keyLayer := packet.Layer(layers.LayerTypeEAPOLKey)
-	if keyLayer == nil {
-		return false, HandshakeFrame{}
-	}
-	EAPOLKey, ok := keyLayer.(*layers.EAPOLKey)
+func parseHandshakeFrame(layer gopacket.Layer, dot11 *layers.Dot11) (bool, HandshakeFrame) {
+	EAPOLKey, ok := layer.(*layers.EAPOLKey)
 	if !ok {
 		return false, HandshakeFrame{}
 	}
@@ -119,125 +100,126 @@ func parseHandshakeFrame(packet gopacket.Packet) (bool, HandshakeFrame) {
 
 // CaptureHandshake captures 4-way handshake packets for a specific BSSID
 func captureHandshake(iface string, bssid string, channel int, outputFile string, verbose bool) error {
-	if verbose {
-		fmt.Printf("Starting handshake capture for BSSID: %s on channel %d\n", bssid, channel)
-		fmt.Printf("Output file: %s\n", outputFile)
-	}
+	// if verbose {
+	// 	fmt.Printf("Starting handshake capture for BSSID: %s on channel %d\n", bssid, channel)
+	// 	fmt.Printf("Output file: %s\n", outputFile)
+	// }
 
-	// Set channel
-	if err := setChannel(iface, channel); err != nil {
-		return fmt.Errorf("failed to set channel: %w", err)
-	}
+	// // Set channel
+	// if err := setChannel(iface, channel); err != nil {
+	// 	return fmt.Errorf("failed to set channel: %w", err)
+	// }
 
-	var f *os.File
-	var pcapWriter *pcapgo.Writer
+	// var f *os.File
+	// var pcapWriter *pcapgo.Writer
 
-	if outputFile != "" {
-		// Create output directory if it doesn't exist
-		dir := filepath.Dir(outputFile)
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			return fmt.Errorf("failed to create output directory: %w", err)
-		}
+	// if outputFile != "" {
+	// 	// Create output directory if it doesn't exist
+	// 	dir := filepath.Dir(outputFile)
+	// 	if err := os.MkdirAll(dir, 0755); err != nil {
+	// 		return fmt.Errorf("failed to create output directory: %w", err)
+	// 	}
 
-		// Open output file in append mode
-		var err error
-		f, err = os.OpenFile(outputFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-		if err != nil {
-			return fmt.Errorf("failed to open output file: %w", err)
-		}
-		defer f.Close()
+	// 	// Open output file in append mode
+	// 	var err error
+	// 	f, err = os.OpenFile(outputFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	// 	if err != nil {
+	// 		return fmt.Errorf("failed to open output file: %w", err)
+	// 	}
+	// 	defer f.Close()
 
-		// Check if file is empty (new file) to write pcap header
-		fileInfo, err := f.Stat()
-		if err != nil {
-			return fmt.Errorf("failed to stat output file: %w", err)
-		}
+	// 	// Check if file is empty (new file) to write pcap header
+	// 	fileInfo, err := f.Stat()
+	// 	if err != nil {
+	// 		return fmt.Errorf("failed to stat output file: %w", err)
+	// 	}
 
-		// Initialize pcap writer
-		pcapWriter = pcapgo.NewWriter(f)
+	// 	// Initialize pcap writer
+	// 	pcapWriter = pcapgo.NewWriter(f)
 
-		// Write pcap header only if file is new/empty
-		if fileInfo.Size() == 0 {
-			if err := pcapWriter.WriteFileHeader(65536, layers.LinkTypeIEEE80211Radio); err != nil {
-				return fmt.Errorf("failed to write pcap header: %w", err)
-			}
-		}
-	}
+	// 	// Write pcap header only if file is new/empty
+	// 	if fileInfo.Size() == 0 {
+	// 		if err := pcapWriter.WriteFileHeader(65536, layers.LinkTypeIEEE80211Radio); err != nil {
+	// 			return fmt.Errorf("failed to write pcap header: %w", err)
+	// 		}
+	// 	}
+	// }
 
-	// Open pcap handle with a short timeout so we can check the deadline
-	handle, err := pcap.OpenLive(iface, 65536, true, pcap.BlockForever)
-	if err != nil {
-		return fmt.Errorf("failed to open interface: %w", err)
-	}
-	defer handle.Close()
+	// // Open pcap handle with a short timeout so we can check the deadline
+	// handle, err := pcap.OpenLive(iface, 65536, true, pcap.BlockForever)
+	// if err != nil {
+	// 	return fmt.Errorf("failed to open interface: %w", err)
+	// }
+	// defer handle.Close()
 
-	// Set to capture IEEE802.11 radio packets
-	if err := handle.SetLinkType(layers.LinkTypeIEEE80211Radio); err != nil {
-		return fmt.Errorf("failed to set link type: %w", err)
-	}
+	// // Set to capture IEEE802.11 radio packets
+	// if err := handle.SetLinkType(layers.LinkTypeIEEE80211Radio); err != nil {
+	// 	return fmt.Errorf("failed to set link type: %w", err)
+	// }
 
-	// Set BPF filter to capture only EAPOL and beacon frames
-	bpfFilter := "wlan proto 0x888e or wlan type mgt subtype beacon"
-	if bssid != "" {
-		bpfFilter = fmt.Sprintf("wlan host %s and (%s)", bssid, bpfFilter)
-	}
-	if err := handle.SetBPFFilter(bpfFilter); err != nil {
-		return fmt.Errorf("failed to set BPF filter: %w", err)
-	}
-	if verbose {
-		fmt.Printf("Using BPF filter: %s\n", bpfFilter)
-	}
+	// // Set BPF filter to capture only EAPOL and beacon frames
+	// bpfFilter := "wlan proto 0x888e or wlan type mgt subtype beacon"
+	// if bssid != "" {
+	// 	bpfFilter = fmt.Sprintf("wlan host %s and (%s)", bssid, bpfFilter)
+	// }
+	// if err := handle.SetBPFFilter(bpfFilter); err != nil {
+	// 	return fmt.Errorf("failed to set BPF filter: %w", err)
+	// }
+	// if verbose {
+	// 	fmt.Printf("Using BPF filter: %s\n", bpfFilter)
+	// }
 
-	fmt.Printf("Waiting for 4-way handshake...\n")
-	fmt.Printf("Wait for a device to connect to the network to trigger the handshake\n\n")
+	// fmt.Printf("Waiting for 4-way handshake...\n")
+	// fmt.Printf("Wait for a device to connect to the network to trigger the handshake\n\n")
 
-	// Use ReadPacketData directly for more reliable packet capture
-	packetCount := 0
-	handshakes := make(map[string][]int)
-	for {
-		data, ci, err := handle.ReadPacketData()
-		if err != nil {
-			fmt.Printf("Warning: error reading packet: %v\n", err)
-			continue
-		}
+	// // Use ReadPacketData directly for more reliable packet capture
+	// packetCount := 0
+	// handshakes := make(map[string][]int)
+	// for {
+	// 	data, ci, err := handle.ReadPacketData()
+	// 	if err != nil {
+	// 		fmt.Printf("Warning: error reading packet: %v\n", err)
+	// 		continue
+	// 	}
 
-		packetCount++
+	// 	packetCount++
 
-		if verbose {
-			if packetCount%100 == 0 {
-				fmt.Printf("Captured %d packets\n", packetCount)
-			}
-		}
+	// 	if verbose {
+	// 		if packetCount%100 == 0 {
+	// 			fmt.Printf("Captured %d packets\n", packetCount)
+	// 		}
+	// 	}
 
-		// Write packet to pcap file
-		if pcapWriter != nil {
-			if err := pcapWriter.WritePacket(ci, data); err != nil {
-				if verbose {
-					fmt.Printf("Warning: failed to write packet: %v\n", err)
-				}
-			}
-		}
+	// 	// Write packet to pcap file
+	// 	if pcapWriter != nil {
+	// 		if err := pcapWriter.WritePacket(ci, data); err != nil {
+	// 			if verbose {
+	// 				fmt.Printf("Warning: failed to write packet: %v\n", err)
+	// 			}
+	// 		}
+	// 	}
 
-		packet := gopacket.NewPacket(data, layers.LayerTypeRadioTap, gopacket.Default)
+	// 	packet := gopacket.NewPacket(data, layers.LayerTypeRadioTap, gopacket.Default)
 
-		// dot11 := getDot11Layer(packet)
-		// if dot11 != nil {
-		// 	fmt.Printf("[D] got dot11. BSSID: %s\n", dot11.Address3)
-		// }
+	// 	dot11 := getDot11Layer(packet)
+	// 	if dot11 != nil {
+	// 		fmt.Printf("[D] got dot11. BSSID: %s\n", dot11.Address3)
+	// 	}
 
-		ok, msg := parseHandshakeFrame(packet)
-		if !ok {
-			continue
-		}
+	// 	ok, msg := parseHandshakeFrame(packet, dot11)
+	// 	if !ok {
+	// 		continue
+	// 	}
 
-		handshakes[msg.BSSID] = []int{0, 0, 0, 0}
+	// 	handshakes[msg.BSSID] = []int{0, 0, 0, 0}
 
-		handshakes[msg.BSSID][msg.Num-1] = msg.Num
-		// fmt.Printf("[+] %d, BSSID: %s, CLIENT: %s\n", msg.Num, msg.BSSID, msg.ClientMAC)
+	// 	handshakes[msg.BSSID][msg.Num-1] = msg.Num
+	// 	// fmt.Printf("[+] %d, BSSID: %s, CLIENT: %s\n", msg.Num, msg.BSSID, msg.ClientMAC)
 
-		fmt.Println()
-		for bssid, msgs := range handshakes {
-			fmt.Printf("%s : %s\n", bssid, joinInts(msgs))
-		}
-	}
+	// 	fmt.Println()
+	// 	for bssid, msgs := range handshakes {
+	// 		fmt.Printf("%s : %s\n", bssid, joinInts(msgs))
+	// 	}
+	// }
+	return nil
 }

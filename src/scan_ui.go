@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"math"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -117,10 +116,6 @@ func (m scanModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.busyChannel = getBusyChannel(m.accessPoints)
 
 	case HandshakeUpdateMsg:
-
-		fmt.Printf("got handshake msg %d\n", msg.Frame.Num)
-		os.Exit(0)
-
 		if m.handshakes == nil {
 			m.handshakes = make(map[string][]HandshakeFrame)
 		}
@@ -260,22 +255,22 @@ func sortAccessPoints(aps map[string]AccessPoint, sortType string) []AccessPoint
 }
 
 // formatHandshakeStatus creates a visual representation of captured handshake frames
-// Returns a string like "۰✔️۰۰" where ✔️ indicates a captured frame
+// Returns a string like "۰+۰۰" where + indicates a captured frame
 func formatHandshakeStatus(frames []HandshakeFrame) string {
 	captured := make(map[int]bool)
 	for _, frame := range frames {
 		captured[frame.Num] = true
 	}
 
-	result := ""
+	var result strings.Builder
 	for i := 1; i <= 4; i++ {
 		if captured[i] {
-			result += "✔️"
+			result.WriteString("+")
 		} else {
-			result += "۰"
+			result.WriteString("۰")
 		}
 	}
-	return result
+	return result.String()
 }
 
 // generates the table content for the viewport

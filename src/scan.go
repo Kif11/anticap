@@ -12,6 +12,7 @@ import (
 
 // TODO:
 // [ ] Add support for continues scanning channels
+// [ ] Add support to save frames to pcap files when scanning
 // [ ] Verify that handshake capture works
 // [ ] Cleanup some brodcasting packets in the result
 // [ ] Find out why some BSSID show up as hidden
@@ -213,6 +214,22 @@ func scanForAccessPoints(iface string, channels []int, scanTime time.Duration, v
 				continue
 			}
 
+			if keyLayer := packet.Layer(layers.LayerTypeEAPOLKey); keyLayer != nil {
+				ok, msg := parseHandshakeFrame(keyLayer, dot11)
+				if !ok {
+					continue
+				}
+
+				// fmt.Println("HANDSHAKE")
+				// os.Exit(1)
+
+				// d.addHandshake(msg)
+
+				if handshakeCh != nil {
+					handshakeCh <- HandshakeUpdateMsg{BSSID: msg.BSSID, Frame: msg}
+				}
+			}
+
 			switch dot11.Type {
 			case layers.Dot11TypeMgmtBeacon,
 				layers.Dot11TypeMgmtProbeResp,
@@ -255,22 +272,6 @@ func scanForAccessPoints(iface string, channels []int, scanTime time.Duration, v
 					d.addClient(bssid, clientMAC)
 				}
 
-			case layers.Dot11TypeMgmtAssociationReq,
-				layers.Dot11TypeMgmtAssociationResp,
-				layers.Dot11TypeMgmtReassociationReq,
-				layers.Dot11TypeMgmtReassociationResp:
-
-				// Handshakes
-
-				ok, msg := parseHandshakeFrame(packet)
-				if !ok {
-					continue
-				}
-
-				d.addHandshake(msg)
-				if handshakeCh != nil {
-					handshakeCh <- HandshakeUpdateMsg{BSSID: msg.BSSID, Frame: msg}
-				}
 			default:
 				continue
 			}
@@ -323,11 +324,6 @@ func handlePacket(p gopacket.Packet) (*layers.Dot11, *layers.RadioTap) {
 	}
 
 	return dot11, radioTap
-}
-
-// isEAPOL checks if the packet contains an EAPOL layer (WPA handshake)
-func isEAPOL(packet gopacket.Packet) bool {
-	return packet.Layer(layers.LayerTypeEAPOL) != nil
 }
 
 // extractSSIDFromBeacon extracts SSID from 802.11 Information Elements
