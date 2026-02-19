@@ -143,7 +143,13 @@ func (a Dot11CipherType) String() string {
 	}
 }
 
-func dot11ParseEncryption(packet gopacket.Packet, dot11 *layers.Dot11) (bool, string, string, string) {
+type Dot11Security struct {
+	Encryption string
+	Cipher     string
+	Auth       string
+}
+
+func dot11ParseEncryption(packet gopacket.Packet, dot11 *layers.Dot11) (bool, Dot11Security) {
 	var i uint16
 	enc := ""
 	cipher := ""
@@ -197,7 +203,7 @@ func dot11ParseEncryption(packet gopacket.Packet, dot11 *layers.Dot11) (bool, st
 		enc = "OPEN"
 	}
 
-	return found, enc, cipher, auth
+	return found, Dot11Security{enc, cipher, auth}
 }
 
 func dot11InformationElementVendorInfoDecode(buf []byte) (v VendorInfo, err error) {

@@ -220,6 +220,11 @@ func captureHandshake(iface string, bssid string, channel int, outputFile string
 
 		packet := gopacket.NewPacket(data, layers.LayerTypeRadioTap, gopacket.Default)
 
+		// dot11 := getDot11Layer(packet)
+		// if dot11 != nil {
+		// 	fmt.Printf("[D] got dot11. BSSID: %s\n", dot11.Address3)
+		// }
+
 		ok, msg := parseHandshakeFrame(packet)
 		if !ok {
 			continue

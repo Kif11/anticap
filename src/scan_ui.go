@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"math"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -23,12 +24,19 @@ type ChannelUpdateMsg struct {
 	Channel int
 }
 
+// HandshakeUpdateMsg is sent when a handshake frame is captured
+type HandshakeUpdateMsg struct {
+	BSSID string
+	Frame HandshakeFrame
+}
+
 // ScanCompleteMsg is sent when scanning is finished
 type ScanCompleteMsg struct{}
 
 // scanModel represents the Bubble Tea scanModel for the scanning UI
 type scanModel struct {
 	accessPoints   map[string]AccessPoint
+	handshakes     map[string][]HandshakeFrame
 	sortBy         string
 	scanning       bool
 	total          int
@@ -51,7 +59,6 @@ var (
 
 	tableHeaderStyle = lipgloss.NewStyle().
 				Bold(true).
-				Foreground(lipgloss.Color("#FAFAFA")).
 				PaddingLeft(1).
 				PaddingRight(1)
 
@@ -108,6 +115,20 @@ func (m scanModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		m.busyChannel = getBusyChannel(m.accessPoints)
+
+	case HandshakeUpdateMsg:
+
+		fmt.Printf("got handshake msg %d\n", msg.Frame.Num)
+		os.Exit(0)
+
+		if m.handshakes == nil {
+			m.handshakes = make(map[string][]HandshakeFrame)
+		}
+		m.handshakes[msg.BSSID] = append(m.handshakes[msg.BSSID], msg.Frame)
+		// Update viewport content
+		if m.ready {
+			m.viewport.SetContent(makeAPTable(m))
+		}
 
 	case ChannelUpdateMsg:
 		m.currentChannel = msg.Channel
@@ -207,7 +228,8 @@ func sortAccessPoints(aps map[string]AccessPoint, sortType string) []AccessPoint
 		apList = append(apList, ap)
 	}
 
-	if sortType == "security" {
+	switch sortType {
+	case "security":
 		// Sort by security strength (weakest first), then by RSSI (strongest first) for ties
 		sort.Slice(apList, func(i, j int) bool {
 			strengthI := getSecurityStrength(apList[i].Security)
@@ -217,7 +239,17 @@ func sortAccessPoints(aps map[string]AccessPoint, sortType string) []AccessPoint
 			}
 			return apList[i].RSSI > apList[j].RSSI // Stronger signal first for ties
 		})
-	} else {
+	case "bssid":
+		// Sort by BSSID alphabetically
+		sort.Slice(apList, func(i, j int) bool {
+			return apList[i].BSSID < apList[j].BSSID
+		})
+	case "clients":
+		// Sort by number of clients (most clients first)
+		sort.Slice(apList, func(i, j int) bool {
+			return len(apList[i].Clients) > len(apList[j].Clients)
+		})
+	default:
 		// Sort by signal strength (strongest RSSI first - less negative = stronger)
 		sort.Slice(apList, func(i, j int) bool {
 			return apList[i].RSSI > apList[j].RSSI
@@ -225,6 +257,25 @@ func sortAccessPoints(aps map[string]AccessPoint, sortType string) []AccessPoint
 	}
 
 	return apList
+}
+
+// formatHandshakeStatus creates a visual representation of captured handshake frames
+// Returns a string like "۰✔️۰۰" where ✔️ indicates a captured frame
+func formatHandshakeStatus(frames []HandshakeFrame) string {
+	captured := make(map[int]bool)
+	for _, frame := range frames {
+		captured[frame.Num] = true
+	}
+
+	result := ""
+	for i := 1; i <= 4; i++ {
+		if captured[i] {
+			result += "✔️"
+		} else {
+			result += "۰"
+		}
+	}
+	return result
 }
 
 // generates the table content for the viewport
@@ -242,6 +293,8 @@ func makeAPTable(m scanModel) string {
 	ssidHeader := lipgloss.NewStyle().Width(32).Align(lipgloss.Left).Render(tableHeaderStyle.Render("SSID"))
 	channelHeader := lipgloss.NewStyle().Width(12).Align(lipgloss.Left).Render(tableHeaderStyle.Render("Channel"))
 	rssiHeader := lipgloss.NewStyle().Width(12).Align(lipgloss.Left).Render(tableHeaderStyle.Render("RSSI"))
+	clientsHeader := lipgloss.NewStyle().Width(8).Align(lipgloss.Left).Render(tableHeaderStyle.Render("Clients"))
+	handshakeHeader := lipgloss.NewStyle().Width(6).Align(lipgloss.Left).Render(tableHeaderStyle.Render("HS"))
 	securityHeader := tableHeaderStyle.Render("Security")
 
 	content.WriteString(lipgloss.JoinHorizontal(lipgloss.Left,
@@ -249,8 +302,10 @@ func makeAPTable(m scanModel) string {
 		ssidHeader, "  ",
 		channelHeader, "  ",
 		rssiHeader, "  ",
+		clientsHeader, "  ",
+		handshakeHeader, "  ",
 		securityHeader) + "\n")
-	content.WriteString(strings.Repeat("─", 120) + "\n")
+	content.WriteString(strings.Repeat("─", 135) + "\n")
 
 	// Table rows
 	for _, ap := range apList {
@@ -294,17 +349,27 @@ func makeAPTable(m scanModel) string {
 
 		activeChannels := getActiveChannels(ap.ChannelStats, 3)
 
+		// Get handshake status
+		handshakeStatus := "۰۰۰۰"
+		if frames, ok := m.handshakes[ap.BSSID]; ok && len(frames) > 0 {
+			handshakeStatus = formatHandshakeStatus(frames)
+		}
+
 		// Build row
 		bssidCol := lipgloss.NewStyle().Width(17).Align(lipgloss.Left).Render(ap.BSSID)
 		ssidCol := lipgloss.NewStyle().Width(32).Align(lipgloss.Left).Render(ssid)
 		channelCol := lipgloss.NewStyle().Width(12).Align(lipgloss.Left).Render(joinInts(activeChannels))
+		clientsCol := lipgloss.NewStyle().Width(8).Align(lipgloss.Left).Render(strconv.Itoa(len(ap.Clients)))
 		rssiCol := lipgloss.NewStyle().Width(12).Align(lipgloss.Left).Render(styledRSSI)
+		handshakeCol := lipgloss.NewStyle().Width(6).Align(lipgloss.Left).Render(handshakeStatus)
 
 		row := lipgloss.JoinHorizontal(lipgloss.Left,
 			bssidCol, "  ",
 			ssidCol, "  ",
 			channelCol, "  ",
 			rssiCol, "  ",
+			clientsCol, "  ",
+			handshakeCol, "  ",
 			styledSecurity)
 		content.WriteString(row + "\n")
 	}

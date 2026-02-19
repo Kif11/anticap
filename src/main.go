@@ -148,7 +148,7 @@ func resolveSSIDFromBSSID(bssid, iface string, verbose bool) (string, error) {
 	channels := append(defaultChannels2G, defaultChannels5G...)
 	scanTime := 300 * time.Millisecond
 
-	aps, err := scanForAccessPoints(iface, channels, scanTime, verbose, nil, nil, nil)
+	aps, err := scanForAccessPoints(iface, channels, scanTime, verbose, nil, nil, nil, nil)
 	if err != nil {
 		return "", fmt.Errorf("scan failed: %w", err)
 	}
@@ -404,13 +404,16 @@ func cmdScan() {
 	// Channel for updates
 	updateCh := make(chan APUpdateMsg, 100)
 	channelCh := make(chan ChannelUpdateMsg, 10)
+	handshakeCh := make(chan HandshakeUpdateMsg, 100)
 	errCh := make(chan error, 10)
 
 	// Run scan in goroutine
 	go func() {
 		defer close(updateCh)
 		defer close(channelCh)
-		aps, err := scanForAccessPoints(*targetInterface, channels, time.Duration(*scanTime)*time.Millisecond, *verbose, updateCh, channelCh, errCh)
+		defer close(handshakeCh)
+		defer close(errCh)
+		aps, err := scanForAccessPoints(*targetInterface, channels, time.Duration(*scanTime)*time.Millisecond, *verbose, updateCh, channelCh, handshakeCh, errCh)
 		if err != nil {
 			fmt.Printf("Error scanning for access points: %v\n", err)
 			return
@@ -439,16 +442,31 @@ func cmdScan() {
 				if !ok {
 					goto done
 				}
+
 				p.Send(msg)
 			case chMsg, ok := <-channelCh:
 				if !ok {
 					continue
 				}
+
+				// fmt.Printf("ch: %d\n", chMsg.Channel)
+
 				p.Send(chMsg)
+			case hsMsg, ok := <-handshakeCh:
+				if !ok {
+					continue
+				}
+
+				// fmt.Printf("handshake %s\n", hsMsg.BSSID)
+
+				p.Send(hsMsg)
 			case err, ok := <-errCh:
 				if !ok {
 					continue
 				}
+
+				// fmt.Printf("err %s\n", err)
+
 				p.Send(err)
 			}
 		}
@@ -456,7 +474,9 @@ func cmdScan() {
 		p.Send(ScanCompleteMsg{})
 	}()
 
-	// Run the program
+	// time.Sleep(120 * time.Second)
+
+	// Start the UI
 	if _, err := p.Run(); err != nil {
 		fmt.Printf("Error running program: %v\n", err)
 		os.Exit(1)
