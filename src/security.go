@@ -261,7 +261,7 @@ func dot11InformationElementVendorInfoDecode(buf []byte) (v VendorInfo, err erro
 func canParse(what string, buf []byte, need int) error {
 	available := len(buf)
 	if need > available {
-		return fmt.Errorf("Malformed 802.11 packet, could not parse %s: needed %d bytes but only %d are available.", what, need, available)
+		return fmt.Errorf("malformed 802.11 packet, could not parse %s: needed %d bytes but only %d are available", what, need, available)
 	}
 	return nil
 }

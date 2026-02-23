@@ -4,13 +4,8 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
-	"sort"
-	"strings"
-
-	scribble "github.com/nanobox-io/golang-scribble"
 )
 
 // Structs for parsing system_profiler JSON output
@@ -127,110 +122,6 @@ func setChannel(iface string, channel int) error {
 	return nil
 }
 
-func getMac(interfc string) (string, error) {
-	netInterface, err := net.InterfaceByName(interfc)
-	if err != nil {
-		return "", err
-	}
-	return netInterface.HardwareAddr.String(), nil
-}
-
-func repairMac(mac string) string {
-	parts := strings.Split(mac, ":")
-
-	var newParts []string
-
-	for _, p := range parts {
-		if len(p) == 1 {
-			p = "0" + p
-		}
-		newParts = append(newParts, p)
-	}
-
-	return strings.Join(newParts, ":")
-}
-
-// Returns a list of cached wifi networks as listed by `system_profiler SPAirPortDataType`
-// Note that networks in this list have no BSIDs
-func listWifiNetworks() ([]NetworkInfo, error) {
-	spResponse, err := systemProfileAirportInfo()
-	if err != nil {
-		return nil, err
-	}
-
-	if len(spResponse.SPAirPortDataType) == 0 {
-		return nil, fmt.Errorf("no AirPort data found in system profiler output")
-	}
-
-	airportData := spResponse.SPAirPortDataType[0]
-	if len(airportData.Interfaces) == 0 {
-		return nil, fmt.Errorf("no AirPort interfaces found in system profiler output")
-	}
-
-	var networks []NetworkInfo
-	for _, iface := range airportData.Interfaces {
-		networks = append(networks, iface.OtherLocalNetworks...)
-	}
-
-	return networks, nil
-}
-
-func systemProfileAirportInfo() (*SystemProfilerResponse, error) {
-	output, err := exec.Command("system_profiler", "-json", "SPAirPortDataType").Output()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get system profiler data: %w", err)
-	}
-
-	var spResponse SystemProfilerResponse
-	if err := json.Unmarshal(output, &spResponse); err != nil {
-		return nil, fmt.Errorf("failed to parse system profiler JSON: %w", err)
-	}
-
-	return &spResponse, nil
-}
-
-func getDefaultAirportInterfaceInfo() (AirPortInterface, error) {
-	info, err := systemProfileAirportInfo()
-	if err != nil {
-		return AirPortInterface{}, err
-	}
-	if len(info.SPAirPortDataType) == 0 {
-		return AirPortInterface{}, fmt.Errorf("no SPAirPortDataType found")
-	}
-
-	if len(info.SPAirPortDataType[0].Interfaces) == 0 {
-		return AirPortInterface{}, fmt.Errorf("no airport interfaces found")
-	}
-
-	return info.SPAirPortDataType[0].Interfaces[0], nil
-}
-
-func getRouterAddress() (string, error) {
-	// Get the default gateway IP and then look up its MAC address in ARP table
-	cmd := exec.Command("sh", "-c", "arp -n $(route get default | grep gateway | awk '{print $2}')")
-	output, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("failed to get router MAC address: %w", err)
-	}
-
-	// Parse the ARP output to extract MAC address
-	// Expected format: "? (192.168.1.1) at 8c:dc:2:7a:a7:17 on en0 ifscope [ethernet]"
-	outputStr := strings.TrimSpace(string(output))
-	if outputStr == "" {
-		return "", fmt.Errorf("no ARP entry found for default gateway")
-	}
-
-	// Split by spaces and find the MAC address (format: xx:xx:xx:xx:xx:xx)
-	parts := strings.Fields(outputStr)
-	for _, part := range parts {
-		if strings.Contains(part, ":") && len(strings.Split(part, ":")) == 6 {
-			return repairMac(part), nil
-		}
-	}
-
-	return "", fmt.Errorf("no MAC address found in ARP output: %s", outputStr)
-}
-
 func dissociateWiFi() error {
 	_, err := runSwift(dissociateWiFiSwift)
 	if err != nil {
@@ -301,35 +192,5 @@ func setMac(interfc string, mac string) error {
 }
 
 func isSudo() bool {
-	if os.Getenv("SUDO_USER") != "" {
-		return true
-	}
-	return false
-}
-
-func resetOriginalMac(db *scribble.Driver, interfc string, verbose bool) error {
-	i := networkInterface{}
-	if err := db.Read("interfaces", interfc, &i); err != nil {
-		return err
-	}
-	if verbose {
-		fmt.Printf("Resseting mac address to %s for %s\n", i.Address, interfc)
-	}
-
-	setMac(interfc, i.Address)
-
-	return nil
-}
-
-func sortDevices(devices map[string]device) []device {
-	var deviceArray []device
-	for _, d := range devices {
-		deviceArray = append(deviceArray, d)
-	}
-
-	sort.SliceStable(deviceArray, func(i, j int) bool {
-		return deviceArray[i].PCount > deviceArray[j].PCount
-	})
-
-	return deviceArray
+	return os.Getenv("SUDO_USER") != ""
 }

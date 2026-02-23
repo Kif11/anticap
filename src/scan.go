@@ -15,28 +15,6 @@ type channelStats struct {
 	numPackets int
 }
 
-// PacketInfo holds extracted information from a single packet
-type PacketInfo struct {
-	srcAddr      string
-	dstAddr      string
-	rssi         int8
-	noise        int8
-	snr          int8
-	dataRate     uint8
-	isDataFrame  bool
-	isRetry      bool
-	frameType    layers.Dot11Type
-	frameSubType layers.Dot11Type
-}
-
-func getMapValue(m map[string][]string, v string) []string {
-	val, ok := m[v]
-	if ok {
-		return val
-	}
-	return []string{}
-}
-
 func scan(
 	iface string,
 	channels []int,
@@ -222,22 +200,6 @@ func getRadioTapLayer(packet gopacket.Packet) *layers.RadioTap {
 	}
 
 	return radioTap
-}
-
-// handlePacket extracts Dot11 and RadioTap layers from a packet
-func handlePacket(p gopacket.Packet) (*layers.Dot11, *layers.RadioTap) {
-	var dot11 *layers.Dot11
-	var radioTap *layers.RadioTap
-
-	if rtLayer := p.Layer(layers.LayerTypeRadioTap); rtLayer != nil {
-		radioTap, _ = rtLayer.(*layers.RadioTap)
-	}
-
-	if d11Layer := p.Layer(layers.LayerTypeDot11); d11Layer != nil {
-		dot11, _ = d11Layer.(*layers.Dot11)
-	}
-
-	return dot11, radioTap
 }
 
 // extractSSIDFromBeacon extracts SSID from 802.11 Information Elements

@@ -1,6 +1,6 @@
 module src
 
-go 1.24.2
+go 1.25.0
 
 require (
 	github.com/charmbracelet/bubbles v1.0.0
@@ -31,6 +31,7 @@ require (
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	golang.org/x/text v0.33.0 // indirect
+	honnef.co/go/tools v0.7.0 // indirect
 )
 
 require (

@@ -9,33 +9,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	scribble "github.com/nanobox-io/golang-scribble"
 )
-
-type device struct {
-	Address        string `json:"address"`
-	PCount         int    `json:"pcount"` // Total packet count
-	Rating         int    `json:"rating"`
-	AvgRSSI        int8   `json:"avg_rssi"`         // Average signal strength
-	LastRSSI       int8   `json:"last_rssi"`        // Most recent reading
-	LastSeen       int64  `json:"last_seen"`        // Unix timestamp
-	RetryCount     int    `json:"retry_count"`      // Frames with Retry flag set
-	DataFrameCount int    `json:"data_frame_count"` // Data frames (vs mgmt/ctrl)
-	MaxDataRate    uint8  `json:"max_data_rate"`    // Highest observed rate
-	SNR            int8   `json:"snr"`              // Signal-to-noise ratio
-}
-
-type networkInterface struct {
-	Name    string
-	Address string
-}
-
-// CachedNetwork represents cached network information
-type CachedNetwork struct {
-	BSSID    string `json:"bssid"`
-	SSID     string `json:"ssid"`
-	Channels []int  `json:"channels"`
-}
 
 // APUpdateMsg is a message sent when an access point is updated
 type APUpdateMsg struct {
@@ -63,23 +37,13 @@ type ClientUpdateMsg struct {
 	ClientMAC string
 }
 
-// Common 2.4GHz and 5GHz channels
 var defaultChannels2G = []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}
 var defaultChannels5G = []int{36, 40, 44, 48, 52, 56, 60, 64, 100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140, 144, 149, 153, 157, 161, 165}
-
-var defaultTarget, _ = getRouterAddress()
 
 func main() {
 	if len(os.Args) < 2 {
 		printUsage()
 		os.Exit(1)
-	}
-
-	dir := "./store"
-	db, err := scribble.New(dir, nil)
-	if err != nil {
-		fmt.Println("Error", err)
-		return
 	}
 
 	switch os.Args[1] {
@@ -89,11 +53,9 @@ func main() {
 		cmdGuess()
 	case "join":
 		cmdJoin()
-	case "reset":
-		cmdReset(db)
 	case "setmac":
 		cmdSetMac()
-	case "setchannel":
+	case "setchan":
 		cmdSetChannel()
 	case "-h", "--help", "help":
 		printUsage()
@@ -112,12 +74,9 @@ Usage:
 
 Commands:
   scan       Scan for available WiFi networks
-  guess      Try to connect to a set of available network with most common passwords
   join       Connect to a WiFi network by name
-  reset      Reset to original MAC address
   setmac     Set interface MAC address
-  setchannel Set interface radio channel
-  list       List stored captures for target MAC
+  setchan    Set interface radio channel
 
 Use "anticap <command> -h" for more information about a command.`)
 }
@@ -140,7 +99,7 @@ func strToIntSlice(str string) []int {
  *	COMMANDS
  */
 
-// cmdScan scans for available WiFi networks
+// Scans for available WiFi networks
 func cmdScan() {
 	scanCmd := flag.NewFlagSet("scan", flag.ExitOnError)
 	scanBands := scanCmd.String("b", "2g", "comma separated list of bands to scan (e.g. 2g,5g)")
@@ -247,7 +206,7 @@ func cmdScan() {
 	}
 }
 
-// cmdJoin connects to a WiFi network by name
+// Connects to a WiFi network by name
 func cmdJoin() {
 	joinCmd := flag.NewFlagSet("join", flag.ExitOnError)
 	password := joinCmd.String("p", "", "password for WiFi network")
@@ -287,29 +246,7 @@ func cmdGuess() {
 	// TODO
 }
 
-// cmdReset resets to original MAC address
-func cmdReset(db *scribble.Driver) {
-	resetCmd := flag.NewFlagSet("reset", flag.ExitOnError)
-	targetInterface := resetCmd.String("i", "en0", "name of wifi interface")
-	verbose := resetCmd.Bool("v", false, "output more information")
-
-	resetCmd.Parse(os.Args[2:])
-
-	if !isSudo() {
-		fmt.Println("This command must be run as root")
-		os.Exit(1)
-	}
-
-	if *verbose {
-		fmt.Printf("Resetting MAC address for interface %s\n", *targetInterface)
-	}
-
-	if err := resetOriginalMac(db, *targetInterface, *verbose); err != nil {
-		fmt.Println("Can not restore original mac", err)
-	}
-}
-
-// cmdSetMac sets the interface MAC address
+// Sets the interface MAC address
 func cmdSetMac() {
 	setMacCmd := flag.NewFlagSet("setmac", flag.ExitOnError)
 	targetInterface := setMacCmd.String("i", "en0", "name of wifi interface")
@@ -337,6 +274,8 @@ func cmdSetMac() {
 	setMac(*targetInterface, macAddress)
 }
 
+// Set target interface channel
+// Note that this will leave the interface in dissociated state
 func cmdSetChannel() {
 	setChannelCmd := flag.NewFlagSet("setchannel", flag.ExitOnError)
 	iface := setChannelCmd.String("i", "en0", "name of wifi interface")
