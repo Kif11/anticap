@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -96,8 +95,6 @@ func main() {
 		cmdSetMac()
 	case "setchannel":
 		cmdSetChannel()
-	case "list":
-		cmdList(db)
 	case "-h", "--help", "help":
 		printUsage()
 	default:
@@ -371,39 +368,5 @@ func cmdSetChannel() {
 	if err := setChannel(*iface, int(channel)); err != nil {
 		fmt.Println("Error setting channel:", err)
 		os.Exit(1)
-	}
-}
-
-// cmdList lists stored captures for target MAC
-func cmdList(db *scribble.Driver) {
-	listCmd := flag.NewFlagSet("list", flag.ExitOnError)
-	targetDevice := listCmd.String("t", defaultTarget, "MAC address of target wifi network")
-	verbose := listCmd.Bool("v", false, "output more information")
-
-	listCmd.Parse(os.Args[2:])
-
-	if *verbose {
-		fmt.Printf("Listing captures for target: %s\n", *targetDevice)
-	}
-
-	records, err := db.ReadAll(*targetDevice)
-	if err != nil {
-		fmt.Println("Error reading database.", err)
-		return
-	}
-
-	devices := make(map[string]device)
-
-	for _, d := range records {
-		device := device{}
-		if err := json.Unmarshal([]byte(d), &device); err != nil {
-			fmt.Println("Error unmarshalling db entry.", err)
-		}
-
-		devices[device.Address] = device
-	}
-
-	for _, d := range sortDevices(devices) {
-		fmt.Printf("%s %d\n", d.Address, d.PCount)
 	}
 }
