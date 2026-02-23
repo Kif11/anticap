@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -12,38 +13,94 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// APUpdateMsg is a message sent when an access point is updated
-type APUpdateMsg struct {
-	BSSID string
-	AP    AccessPoint
-}
-
-// ChannelUpdateMsg is sent when starting to scan a new channel
-type ChannelUpdateMsg struct {
-	Channel int
-}
-
-// HandshakeUpdateMsg is sent when a handshake frame is captured
-type HandshakeUpdateMsg struct {
-	BSSID string
-	Frame HandshakeFrame
-}
-
 // ScanCompleteMsg is sent when scanning is finished
 type ScanCompleteMsg struct{}
 
-// scanModel represents the Bubble Tea scanModel for the scanning UI
-type scanModel struct {
-	accessPoints   map[string]AccessPoint
-	handshakes     map[string][]HandshakeFrame
-	sortBy         string
-	scanning       bool
-	total          int
-	currentChannel int
-	busyChannel    int
-	viewport       viewport.Model
-	err            error
-	ready          bool
+// AccessPoint represents a WiFi access point
+type AccessPoint struct {
+	BSSID        string               `json:"bssid"`
+	SSID         string               `json:"ssid"`
+	Channels     []int                `json:"channels"`
+	ChannelStats map[int]channelStats `json:"channel_stats"`
+	Clients      []string             `json:"client"`
+	Handshakes   []HandshakeFrame     `json:"handshakes"`
+	RSSI         int8                 `json:"rssi"`
+	Security     string               `json:"security"`
+	SeenAt       int64                `json:"seen_at"`
+}
+
+// ScanModel represents the Bubble Tea ScanModel for the scanning UI
+type ScanModel struct {
+	APs            map[string]AccessPoint
+	SortBy         string
+	Scanning       bool
+	Total          int
+	CurrentChannel int
+	BusyChannel    int
+	Viewport       viewport.Model
+	Err            error
+	Ready          bool
+}
+
+// NewScanModel creates a new ScanModel with initialized fields
+func NewScanModel() ScanModel {
+	return ScanModel{
+		APs: make(map[string]AccessPoint),
+	}
+}
+
+func (d *ScanModel) addAP(bssid, ssid string, channel int, security Dot11Security, signal int8, numPackets int) AccessPoint {
+	if existing, ok := d.APs[bssid]; ok {
+		// Use last captured signal strength
+		existing.RSSI = signal
+
+		if !slices.Contains(existing.Channels, channel) {
+			existing.Channels = append(existing.Channels, channel)
+		}
+
+		stats := existing.ChannelStats[channel]
+		stats.numPackets = numPackets
+		existing.ChannelStats[channel] = stats
+
+		d.APs[bssid] = existing
+
+		return existing
+	} else {
+		ap := AccessPoint{
+			BSSID:        bssid,
+			SSID:         ssid,
+			Channels:     []int{channel},
+			RSSI:         signal,
+			ChannelStats: map[int]channelStats{channel: {numPackets: numPackets}},
+			Security:     fmt.Sprintf("%s %s %s", security.Encryption, security.Cipher, security.Auth),
+		}
+
+		d.APs[bssid] = ap
+
+		return ap
+	}
+}
+
+func (d *ScanModel) addHandshake(frame HandshakeFrame) {
+	ap, ok := d.APs[frame.BSSID]
+	if !ok {
+		return
+	}
+
+	ap.Handshakes = append(ap.Handshakes, frame)
+	d.APs[frame.BSSID] = ap
+}
+
+func (d *ScanModel) addClient(bssid, clientMAC string) {
+	ap, ok := d.APs[bssid]
+	if !ok {
+		return
+	}
+
+	if !slices.Contains(ap.Clients, clientMAC) {
+		ap.Clients = append(ap.Clients, clientMAC)
+		d.APs[bssid] = ap
+	}
 }
 
 // Styles
@@ -73,12 +130,12 @@ var (
 )
 
 // Init initializes the model
-func (m scanModel) Init() tea.Cmd {
+func (m ScanModel) Init() tea.Cmd {
 	return nil
 }
 
 // Update handles messages
-func (m scanModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m ScanModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	var cmds []tea.Cmd
 
@@ -88,49 +145,48 @@ func (m scanModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 		// Handle viewport keys
-		m.viewport, cmd = m.viewport.Update(msg)
+		m.Viewport, cmd = m.Viewport.Update(msg)
 		cmds = append(cmds, cmd)
 	case tea.WindowSizeMsg:
 		headerHeight := 6
-		if !m.ready {
+		if !m.Ready {
 			// Initialize viewport
-			m.viewport = viewport.New(msg.Width, msg.Height-headerHeight)
-			m.viewport.SetContent(makeAPTable(m))
-			m.ready = true
+			m.Viewport = viewport.New(msg.Width, msg.Height-headerHeight)
+			m.Viewport.SetContent(makeAPTable(m))
+			m.Ready = true
 		} else {
-			m.viewport.Width = msg.Width
-			m.viewport.Height = msg.Height - headerHeight
+			m.Viewport.Width = msg.Width
+			m.Viewport.Height = msg.Height - headerHeight
 		}
 	case APUpdateMsg:
-		if m.accessPoints == nil {
-			m.accessPoints = make(map[string]AccessPoint)
-		}
-
-		m.accessPoints[msg.BSSID] = msg.AP
-		m.total = len(m.accessPoints)
+		m.addAP(msg.BSSID, msg.SSID, msg.Channel, msg.Security, int8(msg.Signal), msg.NumPackets)
+		m.Total = len(m.APs)
 		// Update viewport content
-		if m.ready {
-			m.viewport.SetContent(makeAPTable(m))
+		if m.Ready {
+			m.Viewport.SetContent(makeAPTable(m))
 		}
 
-		m.busyChannel = getBusyChannel(m.accessPoints)
+		m.BusyChannel = getBusyChannel(m.APs)
+
+	case ClientUpdateMsg:
+		m.addClient(msg.BSSID, msg.ClientMAC)
+		if m.Ready {
+			m.Viewport.SetContent(makeAPTable(m))
+		}
 
 	case HandshakeUpdateMsg:
-		if m.handshakes == nil {
-			m.handshakes = make(map[string][]HandshakeFrame)
-		}
-		m.handshakes[msg.BSSID] = append(m.handshakes[msg.BSSID], msg.Frame)
+		m.addHandshake(msg.Frame)
 		// Update viewport content
-		if m.ready {
-			m.viewport.SetContent(makeAPTable(m))
+		if m.Ready {
+			m.Viewport.SetContent(makeAPTable(m))
 		}
 
 	case ChannelUpdateMsg:
-		m.currentChannel = msg.Channel
+		m.CurrentChannel = msg.Channel
 	case ScanCompleteMsg:
-		m.scanning = false
+		m.Scanning = false
 	case error:
-		m.err = msg
+		m.Err = msg
 	}
 
 	return m, tea.Batch(cmds...)
@@ -141,26 +197,26 @@ func ta(i int) string {
 }
 
 // View renders the UI
-func (m scanModel) View() string {
-	if !m.ready {
+func (m ScanModel) View() string {
+	if !m.Ready {
 		return lipgloss.NewStyle().Foreground(lipgloss.Color("#7D56F4")).Render("Initializing...")
 	}
 
 	// Header
 	var header string
-	if m.scanning {
-		header = headerStyle.Render(fmt.Sprintf("📡 Scanning channel: %s, Total APs: %s, Busiest channel: %s ... 'q' to quit", ta(m.currentChannel), ta(m.total), ta(m.busyChannel)))
+	if m.Scanning {
+		header = headerStyle.Render(fmt.Sprintf("📡 Scanning channel: %s, Total APs: %s, Busiest channel: %s ... 'q' to quit", ta(m.CurrentChannel), ta(m.Total), ta(m.BusyChannel)))
 	} else {
-		header = headerStyle.Render(fmt.Sprintf("📡 Scan Complete!, Total APs: %s, Busiest channel: %s ... 'q' to quit", ta(m.total), ta(m.busyChannel)))
+		header = headerStyle.Render(fmt.Sprintf("📡 Scan Complete!, Total APs: %s, Busiest channel: %s ... 'q' to quit", ta(m.Total), ta(m.BusyChannel)))
 	}
 
 	var errorLine string = ""
-	if m.err != nil {
-		errorLine = errorStyle.Render(fmt.Sprintf("⚠️  %s", m.err.Error()))
+	if m.Err != nil {
+		errorLine = errorStyle.Render(fmt.Sprintf("⚠️  %s", m.Err.Error()))
 	}
 
 	// Combine header and viewport with a table
-	return lipgloss.JoinVertical(lipgloss.Left, header, errorLine, m.viewport.View())
+	return lipgloss.JoinVertical(lipgloss.Left, header, errorLine, m.Viewport.View())
 }
 
 // Get top N channels with most amount of packets
@@ -274,12 +330,12 @@ func formatHandshakeStatus(frames []HandshakeFrame) string {
 }
 
 // generates the table content for the viewport
-func makeAPTable(m scanModel) string {
-	if len(m.accessPoints) == 0 {
+func makeAPTable(m ScanModel) string {
+	if len(m.APs) == 0 {
 		return lipgloss.NewStyle().Foreground(lipgloss.Color("#888888")).Render("No access points found yet...")
 	}
 
-	apList := sortAccessPoints(m.accessPoints, m.sortBy)
+	apList := sortAccessPoints(m.APs, m.SortBy)
 
 	var content strings.Builder
 
@@ -346,8 +402,8 @@ func makeAPTable(m scanModel) string {
 
 		// Get handshake status
 		handshakeStatus := "۰۰۰۰"
-		if frames, ok := m.handshakes[ap.BSSID]; ok && len(frames) > 0 {
-			handshakeStatus = formatHandshakeStatus(frames)
+		if ap, ok := m.APs[ap.BSSID]; ok {
+			handshakeStatus = formatHandshakeStatus(ap.Handshakes)
 		}
 
 		// Build row

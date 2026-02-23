@@ -4,10 +4,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"log"
 	"os"
-	"os/signal"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -41,6 +38,32 @@ type CachedNetwork struct {
 	Channels []int  `json:"channels"`
 }
 
+// APUpdateMsg is a message sent when an access point is updated
+type APUpdateMsg struct {
+	BSSID      string
+	SSID       string
+	Security   Dot11Security
+	Channel    int
+	Signal     int
+	NumPackets int
+}
+
+// ChannelUpdateMsg is sent when starting to scan a new channel
+type ChannelUpdateMsg struct {
+	Channel int
+}
+
+// HandshakeUpdateMsg is sent when a handshake frame is captured
+type HandshakeUpdateMsg struct {
+	BSSID string
+	Frame HandshakeFrame
+}
+
+type ClientUpdateMsg struct {
+	BSSID     string
+	ClientMAC string
+}
+
 // Common 2.4GHz and 5GHz channels
 var defaultChannels2G = []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}
 var defaultChannels5G = []int{36, 40, 44, 48, 52, 56, 60, 64, 100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140, 144, 149, 153, 157, 161, 165}
@@ -61,14 +84,8 @@ func main() {
 	}
 
 	switch os.Args[1] {
-	case "bypass":
-		cmdBypass(db)
 	case "scan":
 		cmdScan()
-	case "capture":
-		cmdCapture(db)
-	case "handshake":
-		cmdHandshake()
 	case "guess":
 		cmdGuess()
 	case "join":
@@ -97,10 +114,7 @@ Usage:
   anticap <command> [options]
 
 Commands:
-  bypass     Run full bypass routine: packet capture, mac spoof, and internet connection testing
   scan       Scan for available WiFi networks
-  capture    Run packet capture only (monitor mode)
-  handshake  Capture WPA/WPA2 4-way handshake for use with aircrack-ng
   guess      Try to connect to a set of available network with most common passwords
   join       Connect to a WiFi network by name
   reset      Reset to original MAC address
@@ -111,13 +125,13 @@ Commands:
 Use "anticap <command> -h" for more information about a command.`)
 }
 
-func parseChanFromArg(chStr string) []int {
-	parts := strings.Split(chStr, ",")
+func strToIntSlice(str string) []int {
+	parts := strings.Split(str, ",")
 	chans := []int{}
 	for _, c := range parts {
 		ch, err := strconv.ParseInt(c, 10, 32)
 		if err != nil {
-			fmt.Printf("can not parse chanel to int %s\n", c)
+			fmt.Printf("can not parse string to int slice %s\n", c)
 			continue
 		}
 		chans = append(chans, int(ch))
@@ -125,238 +139,9 @@ func parseChanFromArg(chStr string) []int {
 	return chans
 }
 
-// resolveSSIDFromBSSID attempts to resolve SSID from BSSID using cache-first approach
-func resolveSSIDFromBSSID(bssid, iface string, verbose bool) (string, error) {
-	// First, try cache lookup
-	if net, err := getCachedNetwork(bssid); err == nil {
-		if verbose {
-			fmt.Printf("Found SSID in cache: %s -> %s\n", bssid, net.SSID)
-		}
-		return net.SSID, nil
-	}
-
-	// Cache miss, try full scan
-	fmt.Printf("SSID not in cache, performing scan for %s\n", bssid)
-
-	// Dissociate from current network to enable monitor mode
-	if err := dissociateWiFi(); err != nil {
-		if verbose {
-			fmt.Printf("Warning: failed to dissociate from WiFi: %v\n", err)
-		}
-	}
-
-	channels := append(defaultChannels2G, defaultChannels5G...)
-	scanTime := 300 * time.Millisecond
-
-	aps, err := scanForAccessPoints(iface, channels, scanTime, verbose, nil, nil, nil, nil)
-	if err != nil {
-		return "", fmt.Errorf("scan failed: %w", err)
-	}
-
-	// Update cache with scan results
-	if err := populateNetworkCache(aps, verbose); err != nil {
-		if verbose {
-			fmt.Printf("Warning: failed to populate cache: %v\n", err)
-		}
-	}
-
-	// Try cache lookup again
-	if net, err := getCachedNetwork(bssid); err == nil {
-		return net.SSID, nil
-	}
-
-	return "", fmt.Errorf("BSSID %s not found in scan results", bssid)
-}
-
-// getCachedNetwork retrieves SSID for given BSSID from cache
-func getCachedNetwork(bssid string) (CachedNetwork, error) {
-	cacheFile := filepath.Join("store", "networks", bssid+".json")
-
-	if _, err := os.Stat(cacheFile); os.IsNotExist(err) {
-		return CachedNetwork{}, fmt.Errorf("no cache entry for BSSID %s", bssid)
-	}
-
-	data, err := os.ReadFile(cacheFile)
-	if err != nil {
-		return CachedNetwork{}, fmt.Errorf("failed to read cache file: %w", err)
-	}
-
-	var info CachedNetwork
-	if err := json.Unmarshal(data, &info); err != nil {
-		return CachedNetwork{}, fmt.Errorf("failed to parse cache file: %w", err)
-	}
-
-	return info, nil
-}
-
-// populateNetworkCache stores discovered networks in individual cache files
-func populateNetworkCache(aps map[string]AccessPoint, verbose bool) error {
-	cacheDir := filepath.Join("store", "networks")
-	if err := os.MkdirAll(cacheDir, 0755); err != nil {
-		return fmt.Errorf("failed to create cache directory: %w", err)
-	}
-
-	count := 0
-	for bssid, ap := range aps {
-		// Skip networks without SSID
-		if ap.SSID == "" {
-			continue
-		}
-
-		info := CachedNetwork{
-			BSSID:    bssid,
-			SSID:     ap.SSID,
-			Channels: ap.Channels,
-		}
-
-		data, err := json.MarshalIndent(info, "", "  ")
-		if err != nil {
-			if verbose {
-				fmt.Printf("Warning: failed to marshal network info for %s: %v\n", bssid, err)
-			}
-			continue
-		}
-
-		cacheFile := filepath.Join(cacheDir, bssid+".json")
-		if err := os.WriteFile(cacheFile, data, 0644); err != nil {
-			if verbose {
-				fmt.Printf("Warning: failed to write cache file for %s: %v\n", bssid, err)
-			}
-			continue
-		}
-		count++
-	}
-
-	if verbose {
-		fmt.Printf("Cached %d networks in %s\n", count, cacheDir)
-	}
-
-	return nil
-}
-
 /*
  *	COMMANDS
  */
-
-// cmdBypass runs the full process: packet capture, mac spoof, and connection testing
-func cmdBypass(db *scribble.Driver) {
-	bypassCmd := flag.NewFlagSet("bypass", flag.ExitOnError)
-	targetInterface := bypassCmd.String("i", "en0", "name of wifi interface")
-	targetDevice := bypassCmd.String("t", defaultTarget, "MAC address of target wifi network")
-	targetChannel := bypassCmd.Int("ch", 0, "target radio channel (1-14)")
-	maxNumPackets := bypassCmd.Int("n", 300, "number of packets to capture")
-	manualSSID := bypassCmd.String("s", "", "manual SSID override (bypasses automatic resolution)")
-	verbose := bypassCmd.Bool("v", false, "output more information")
-
-	bypassCmd.Parse(os.Args[2:])
-
-	if *targetDevice == "" {
-		fmt.Println("Your are not associated with any WiFi networks at the moment therefor you must specify target network MAC with -t <MAC>.")
-		fmt.Println("Use `anticap scan` to determine target MAC address.")
-		os.Exit(1)
-	}
-
-	if !isSudo() {
-		fmt.Println("This command must be run as root")
-		os.Exit(1)
-	}
-
-	interfaceStore := fmt.Sprintf("store/interfaces/%s.json", *targetInterface)
-
-	if _, err := os.Stat(interfaceStore); os.IsNotExist(err) {
-		currentMacAddress, err := getMac(*targetInterface)
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		if *verbose {
-			fmt.Printf("Saving current mac address %s to %s\n", currentMacAddress, interfaceStore)
-		}
-
-		currentInterface := networkInterface{
-			Name:    *targetInterface,
-			Address: currentMacAddress,
-		}
-
-		db.Write("interfaces", *targetInterface, currentInterface)
-	}
-
-	// Resolve SSID from BSSID
-	var ssid string
-	if *manualSSID != "" {
-		// Manual override provided
-		ssid = *manualSSID
-		if *verbose {
-			fmt.Printf("Using manual SSID override: %s\n", ssid)
-		}
-	} else {
-		// Try to resolve SSID automatically
-		resolvedSSID, err := resolveSSIDFromBSSID(*targetDevice, *targetInterface, *verbose)
-		if err != nil {
-			fmt.Printf("Failed to resolve SSID for BSSID %s: %v\n", *targetDevice, err)
-			fmt.Printf("\nSuggestions:\n")
-			fmt.Printf("  1. Use manual SSID override: anticap bypass -t %s -s \"YourNetworkName\"\n", *targetDevice)
-			fmt.Printf("  2. Run 'anticap scan' to populate the network cache\n")
-			os.Exit(1)
-		}
-		ssid = resolvedSSID
-		if *verbose {
-			fmt.Printf("Resolved SSID: %s\n", ssid)
-		}
-	}
-
-	if *targetChannel == 0 {
-		// If user didn't specify target channel try to resole it from cache
-		if net, err := getCachedNetwork(*targetDevice); err == nil && len(net.Channels) > 0 {
-			*targetChannel = net.Channels[0]
-		} else {
-			fmt.Println("Warning: Can not load target network channel from cache. Using default.")
-			*targetChannel = 11
-		}
-	}
-
-	fmt.Printf("Starting packet capture. Iface: %s Channel: %d, Target router: %s (SSID: %s)\n", *targetInterface, *targetChannel, *targetDevice, ssid)
-
-	// On newer mac it is required to dissociate from active WiFi network before using monitor mode
-	err := dissociateWiFi()
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	devices, err := monitor(db, *targetInterface, *targetDevice, *targetChannel, *maxNumPackets)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	ratedDevices, err := rateConnections(db, *targetInterface, *targetDevice, ssid, devices)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	bestDevice := getBestDevice(ratedDevices)
-
-	if bestDevice.Rating == 0 {
-		fmt.Println("None of the devices has internet access. Exiting!")
-
-		if err := resetOriginalMac(db, *targetInterface, *verbose); err != nil {
-			fmt.Println("Can not restore original mac", err)
-		}
-
-		return
-	}
-
-	fmt.Printf("Setting mac to %s with connection rating %d\n", bestDevice.Address, bestDevice.Rating)
-	setMac(*targetInterface, bestDevice.Address)
-
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Interrupt)
-	go func() {
-		for range c {
-			log.Println("Terminated by user")
-			os.Exit(0)
-		}
-	}()
-}
 
 // cmdScan scans for available WiFi networks
 func cmdScan() {
@@ -367,6 +152,7 @@ func cmdScan() {
 	scanTime := scanCmd.Int("t", 250, "time in milliseconds to monitor each channel")
 	sortBy := scanCmd.String("s", "signal", "sort results by: signal or security")
 	targetInterface := scanCmd.String("i", "en0", "name of wifi interface")
+	outputPcapFile := scanCmd.String("o", "", "output pcap file")
 	verbose := scanCmd.Bool("v", false, "output more information")
 
 	scanCmd.Parse(os.Args[2:])
@@ -398,196 +184,70 @@ func cmdScan() {
 	}
 
 	if *scanChan != "" {
-		channels = parseChanFromArg(*scanChan)
+		channels = strToIntSlice(*scanChan)
 	}
 
 	// Channel for updates
-	updateCh := make(chan APUpdateMsg, 100)
-	channelCh := make(chan ChannelUpdateMsg, 10)
-	handshakeCh := make(chan HandshakeUpdateMsg, 100)
-	errCh := make(chan error, 10)
+	apUpdateCh := make(chan APUpdateMsg, 100)
+	clientUpdateCh := make(chan ClientUpdateMsg, 100)
+	channelUpdateCh := make(chan ChannelUpdateMsg, 10)
+	handshakeUpdateCh := make(chan HandshakeUpdateMsg, 100)
+	errUpdateCh := make(chan error, 10)
 
 	// Run scan in goroutine
 	go func() {
-		defer close(updateCh)
-		defer close(channelCh)
-		defer close(handshakeCh)
-		defer close(errCh)
-		aps, err := scanForAccessPoints(*targetInterface, channels, time.Duration(*scanTime)*time.Millisecond, *verbose, updateCh, channelCh, handshakeCh, errCh)
+		defer close(apUpdateCh)
+		err := scan(
+			*targetInterface,
+			channels,
+			time.Duration(*scanTime)*time.Millisecond,
+			*outputPcapFile,
+			apUpdateCh,
+			clientUpdateCh,
+			channelUpdateCh,
+			handshakeUpdateCh,
+			errUpdateCh)
 		if err != nil {
 			fmt.Printf("Error scanning for access points: %v\n", err)
 			return
 		}
-
-		// Populate network cache
-		if err := populateNetworkCache(aps, *verbose); err != nil {
-			fmt.Printf("Warning: failed to populate network cache: %v\n", err)
-		}
 	}()
 
 	// Create Bubble Tea model
-	m := scanModel{
-		sortBy:   *sortBy,
-		scanning: true,
-	}
+	m := NewScanModel()
+	m.SortBy = *sortBy
+	m.Scanning = true
 
 	// Create Bubble Tea program
 	p := tea.NewProgram(m)
 
-	// Handle updates in a goroutine
+	// Handle UI updates
 	go func() {
 		for {
 			select {
-			case msg, ok := <-updateCh:
+			case msg, ok := <-apUpdateCh:
 				if !ok {
-					goto done
+					p.Send(ScanCompleteMsg{})
+					return
 				}
-
 				p.Send(msg)
-			case chMsg, ok := <-channelCh:
-				if !ok {
-					continue
-				}
-
-				// fmt.Printf("ch: %d\n", chMsg.Channel)
-
+			case msg := <-clientUpdateCh:
+				p.Send(msg)
+			case chMsg := <-channelUpdateCh:
 				p.Send(chMsg)
-			case hsMsg, ok := <-handshakeCh:
-				if !ok {
-					continue
-				}
-
-				// fmt.Printf("handshake %s\n", hsMsg.BSSID)
-
+			case hsMsg := <-handshakeUpdateCh:
 				p.Send(hsMsg)
-			case err, ok := <-errCh:
-				if !ok {
-					continue
-				}
-
-				// fmt.Printf("err %s\n", err)
-
+			case err := <-errUpdateCh:
 				p.Send(err)
 			}
 		}
-	done:
-		p.Send(ScanCompleteMsg{})
 	}()
-
-	// time.Sleep(120 * time.Second)
 
 	// Start the UI
 	if _, err := p.Run(); err != nil {
 		fmt.Printf("Error running program: %v\n", err)
 		os.Exit(1)
 	}
-}
-
-// cmdCapture runs packet capture only
-func cmdCapture(db *scribble.Driver) {
-	captureCmd := flag.NewFlagSet("capture", flag.ExitOnError)
-	targetInterface := captureCmd.String("i", "en0", "name of wifi interface")
-	targetDevice := captureCmd.String("t", defaultTarget, "MAC address of target wifi network")
-	targetChannel := captureCmd.Int("ch", 11, "target radio channel (1-14)")
-	maxNumPackets := captureCmd.Int("n", 300, "number of packets to capture")
-	verbose := captureCmd.Bool("v", false, "output more information")
-
-	captureCmd.Parse(os.Args[2:])
-
-	if !isSudo() {
-		fmt.Println("This command must be run as root")
-		os.Exit(1)
-	}
-
-	interfaceStore := fmt.Sprintf("store/interfaces/%s.json", *targetInterface)
-
-	if _, err := os.Stat(interfaceStore); os.IsNotExist(err) {
-		currentMacAddress, err := getMac(*targetInterface)
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		if *verbose {
-			fmt.Printf("Saving current mac address %s to %s\n", currentMacAddress, interfaceStore)
-		}
-
-		currentInterface := networkInterface{
-			Name:    *targetInterface,
-			Address: currentMacAddress,
-		}
-
-		db.Write("interfaces", *targetInterface, currentInterface)
-	}
-
-	if *verbose {
-		fmt.Printf("Starting packet capture. Iface: %s Channel: %d, Target router: %s\n", *targetInterface, *targetChannel, *targetDevice)
-	}
-
-	// On newer mac it is required to dissociate from active WiFi network before using monitor mode
-	err := dissociateWiFi()
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	_, err = monitor(db, *targetInterface, *targetDevice, *targetChannel, *maxNumPackets)
-	if err != nil {
-		log.Fatal(err)
-	}
-}
-
-// cmdHandshake captures WPA/WPA2 4-way handshake packets
-func cmdHandshake() {
-	handshakeCmd := flag.NewFlagSet("handshake", flag.ExitOnError)
-	targetInterface := handshakeCmd.String("i", "en0", "name of wifi interface")
-	targetDevice := handshakeCmd.String("t", "", "MAC address of target wifi network (BSSID)")
-	targetChannel := handshakeCmd.Int("ch", 0, "target radio channel (1-14)")
-	outputFile := handshakeCmd.String("o", "", "output file for captured handshake (PCAP format)")
-	verbose := handshakeCmd.Bool("v", false, "output more information")
-
-	handshakeCmd.Parse(os.Args[2:])
-
-	if !isSudo() {
-		fmt.Println("This command must be run as root")
-		os.Exit(1)
-	}
-
-	if *targetChannel == 0 {
-		if net, err := getCachedNetwork(*targetDevice); err == nil && len(net.Channels) > 0 {
-			*targetChannel = net.Channels[0]
-			if *verbose {
-				fmt.Printf("Using cached channel %d for %s\n", *targetChannel, *targetDevice)
-			}
-		} else {
-			fmt.Println("Warning: Cannot load target network channel from cache. Using default 11.")
-			*targetChannel = 11
-		}
-	}
-
-	if *outputFile == "" {
-		*outputFile = fmt.Sprintf("handshakes/%s_%s.pcap", *targetDevice, time.Now().Format("20060102-150405"))
-	}
-
-	if *verbose {
-		fmt.Printf("Saving handshake to %s\n", *outputFile)
-	}
-
-	if err := os.MkdirAll(filepath.Dir(*outputFile), 0755); err != nil {
-		log.Fatal(err)
-	}
-
-	// On newer mac it is required to dissociate from active WiFi network before using monitor mode
-	if err := dissociateWiFi(); err != nil {
-		log.Fatal(err)
-	}
-
-	err := captureHandshake(*targetInterface, *targetDevice, *targetChannel, *outputFile, *verbose)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	fmt.Printf("\nHandshake capture complete. File: %s\n", *outputFile)
-	fmt.Printf("You can now use this file with aircrack-ng, for example:\n")
-	fmt.Printf("  aircrack-ng -w <wordlist> %s\n", *outputFile)
 }
 
 // cmdJoin connects to a WiFi network by name
